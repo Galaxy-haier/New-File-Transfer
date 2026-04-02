@@ -39,6 +39,8 @@ const CONFIG = {
   MULTIPART_THRESHOLD: 100 * 1024 * 1024,
 };
 
+const FAVICON_DATA_URL = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%2338BDF8' d='M8 16.5A4.5 4.5 0 0 1 12.5 12H25l5.2 5.2H51.5A4.5 4.5 0 0 1 56 21.7v24.8A5.5 5.5 0 0 1 50.5 52h-37A5.5 5.5 0 0 1 8 46.5v-30Z'/%3E%3Cpath fill='%230EA5E9' d='M8 24.5A5.5 5.5 0 0 1 13.5 19H50.2A5.8 5.8 0 0 1 56 24.8v21.7A5.5 5.5 0 0 1 50.5 52h-37A5.5 5.5 0 0 1 8 46.5v-22Z'/%3E%3C/svg%3E";
+
 // ==================== HTML 模板 ====================
 const HTML_TEMPLATE = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -46,6 +48,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
   <title>文件中转站 | File Transfer</title>
+  <link rel="icon" href="${FAVICON_DATA_URL}">
   <!-- QR Code Generator 库 -->
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <style>
@@ -2128,6 +2131,7 @@ function getFileDetailHtml(fileId, fileName, fileSize, hasPassword, uploadTime) 
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>文件详情 - ${escapeHtml(fileName)}</title>
+  <link rel="icon" href="${FAVICON_DATA_URL}">
   <style>
     :root {
       --bg-primary: #0a0a0f;
