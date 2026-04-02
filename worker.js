@@ -47,7 +47,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-  <title>文件中转站 | File Transfer</title>
+  <title>文件中转站 |New File Transfer</title>
   <link rel="icon" href="${FAVICON_DATA_URL}">
   <!-- QR Code Generator 库 -->
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
