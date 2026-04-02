@@ -1,0 +1,56 @@
+<svg width="1174" height="780" viewBox="0 0 1174 780" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1174" height="780" fill="#0B0B12"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1174" y2="780" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1D1430"/>
+      <stop offset="1" stop-color="#0B0B12"/>
+    </linearGradient>
+    <linearGradient id="title" x1="440" y1="40" x2="720" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="upload" x1="100" y1="332" x2="1035" y2="582" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#272141"/>
+      <stop offset="1" stop-color="#192633"/>
+    </linearGradient>
+  </defs>
+  <rect width="1174" height="780" fill="url(#bg)"/>
+
+  <g opacity="0.95">
+    <path d="M470 40H487L493 46H524C529.523 46 534 50.4772 534 56V95C534 100.523 529.523 105 524 105H453C447.477 105 443 100.523 443 95V50C443 44.4772 447.477 40 453 40H470Z" fill="#38BDF8"/>
+    <text x="548" y="72" fill="url(#title)" font-size="46" font-family="Segoe UI, Arial, sans-serif" font-weight="700">文件中转站</text>
+    <text x="502" y="112" fill="#B8B4D9" font-size="18" font-family="Segoe UI, Arial, sans-serif">安全、快速的文件分享服务</text>
+  </g>
+
+  <g>
+    <rect x="67" y="167" width="322" height="106" rx="18" fill="#201D2E" stroke="#3C3650"/>
+    <rect x="405" y="167" width="322" height="106" rx="18" fill="#201D2E" stroke="#3C3650"/>
+    <rect x="743" y="167" width="322" height="106" rx="18" fill="#201D2E" stroke="#3C3650"/>
+
+    <text x="87" y="198" fill="#9E9AB8" font-size="16" font-family="Segoe UI, Arial, sans-serif">剩余存储空间</text>
+    <text x="87" y="242" fill="#8B5CF6" font-size="29" font-family="Segoe UI, Arial, sans-serif" font-weight="700">10 GB</text>
+
+    <text x="425" y="198" fill="#9E9AB8" font-size="16" font-family="Segoe UI, Arial, sans-serif">文件过期时间</text>
+    <text x="425" y="242" fill="#22D3EE" font-size="29" font-family="Segoe UI, Arial, sans-serif" font-weight="700">7天</text>
+
+    <text x="763" y="198" fill="#9E9AB8" font-size="16" font-family="Segoe UI, Arial, sans-serif">下载链接有效期</text>
+    <text x="763" y="242" fill="#FF5CB8" font-size="29" font-family="Segoe UI, Arial, sans-serif" font-weight="700">5分钟</text>
+  </g>
+
+  <g>
+    <rect x="67" y="299" width="1000" height="430" rx="22" fill="#1B1A28" stroke="#36324A"/>
+    <rect x="100" y="332" width="934" height="250" rx="20" fill="url(#upload)" stroke="#5B3CA7" stroke-width="2" stroke-dasharray="8 6"/>
+
+    <path d="M568 409C562 409 556.6 411.5 553 415.5C549.4 407.4 541.2 402 531.8 402C519.1 402 508.8 412.3 508.8 425C508.8 425.8 508.9 426.6 509 427.4C500.9 428.7 495 435.6 495 444C495 453.4 502.6 461 512 461H571C584.8 461 596 449.8 596 436C596 422.2 584.8 411 571 411C570 411 569 411 568 409Z" fill="#4C8DF5"/>
+
+    <text x="467" y="505" fill="#FFFFFF" font-size="18" font-family="Segoe UI, Arial, sans-serif" font-weight="700">点击或拖拽文件</text>
+    <text x="621" y="505" fill="#9793AF" font-size="18" font-family="Segoe UI, Arial, sans-serif">到此处上传</text>
+    <text x="510" y="533" fill="#7F7A99" font-size="14" font-family="Segoe UI, Arial, sans-serif">支持多文件同时上传</text>
+
+    <rect x="100" y="607" width="934" height="140" rx="16" fill="#26223D" stroke="#5B3CA7"/>
+    <text x="124" y="640" fill="#A56AFF" font-size="17" font-family="Segoe UI, Arial, sans-serif" font-weight="700">分享密码（可选）</text>
+    <rect x="120" y="660" width="894" height="40" rx="10" fill="#1B1A28" stroke="#3A3650"/>
+    <text x="138" y="686" fill="#7D7897" font-size="13" font-family="Segoe UI, Arial, sans-serif">设置密码后，他人下载文件时需要输入此密码</text>
+    <text x="120" y="724" fill="#9C96A9" font-size="12" font-family="Segoe UI, Arial, sans-serif">留空则不设置密码保护，此密码将应用于本次上传的所有文件</text>
+  </g>
+</svg>
