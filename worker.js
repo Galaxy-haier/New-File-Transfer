@@ -29,6 +29,9 @@ const CONFIG = {
   // 自定义域名（如果有绑定自定义域名，填写这里）
   CUSTOM_DOMAIN: '',
 
+  // API Key（用于程序化访问 /api/v1/* 接口，留空则不启用 API Key 认证）
+  API_KEY: '',
+
   // 最大并发上传数
   MAX_CONCURRENT_UPLOADS: 3,
 
@@ -2488,6 +2491,10 @@ export default {
         return handleVerifyPassword(request, env, bucket, path);
       }
 
+      if (path.startsWith('/api/v1/')) {
+        return handleApiV1(request, env, bucket, baseUrl, path);
+      }
+
       if (path.startsWith('/api/')) {
         return handleApi(request, env, bucket, baseUrl, path);
       }
@@ -2822,6 +2829,288 @@ async function handleApi(request, env, bucket, baseUrl, path) {
   }
 
   return jsonResponse({ error: 'Not found' }, 404);
+}
+
+// ==================== API v1（程序化接口） ====================
+
+// API Key 认证检查
+function checkApiKey(request) {
+  if (!CONFIG.API_KEY) {
+    return jsonResponse({ error: 'API Key not configured on server. Set API_KEY in CONFIG.' }, 503);
+  }
+  const provided = request.headers.get('X-API-Key') || '';
+  if (provided !== CONFIG.API_KEY) {
+    return jsonResponse({ error: 'Unauthorized: invalid or missing X-API-Key header' }, 401);
+  }
+  return null; // 认证通过
+}
+
+async function handleApiV1(request, env, bucket, baseUrl, path) {
+  // 所有 /api/v1/* 接口都需要 API Key 认证
+  const authError = checkApiKey(request);
+  if (authError) return authError;
+
+  const subPath = path.replace('/api/v1', '');
+
+  // GET /api/v1/files - 列出所有文件
+  if (subPath === '/files' && request.method === 'GET') {
+    const storage = await collectStorageState(bucket, baseUrl, { includeFiles: true });
+    storage.files.sort((a, b) => (b.uploadTime || 0) - (a.uploadTime || 0));
+    return jsonResponse({
+      files: storage.files,
+      storage: {
+        limitBytes: storage.limitBytes,
+        usedBytes: storage.usedBytes,
+        remainingBytes: storage.remainingBytes
+      }
+    });
+  }
+
+  // GET /api/v1/storage - 查看存储空间
+  if (subPath === '/storage' && request.method === 'GET') {
+    const storage = await collectStorageState(bucket, baseUrl, { includeFiles: false });
+    return jsonResponse({
+      limitBytes: storage.limitBytes,
+      usedBytes: storage.usedBytes,
+      remainingBytes: storage.remainingBytes
+    });
+  }
+
+  // PUT /api/v1/upload - 直接上传文件内容
+  // Headers: X-Filename (required), Content-Type (optional), X-Expire-Ms (optional), X-Share-Password (optional)
+  // Body: raw file content
+  if (subPath === '/upload' && request.method === 'PUT') {
+    return handleApiV1Upload(request, bucket, baseUrl);
+  }
+
+  // POST /api/v1/upload-url - 从 URL 下载文件并存储
+  // Body JSON: { url, filename?, expireMs?, sharePassword? }
+  if (subPath === '/upload-url' && request.method === 'POST') {
+    return handleApiV1UploadUrl(request, env, bucket, baseUrl);
+  }
+
+  // GET /api/v1/download/:fileId - 直接下载文件内容（返回二进制流）
+  if (subPath.startsWith('/download/') && request.method === 'GET') {
+    const fileId = subPath.split('/')[2];
+    return handleApiV1Download(fileId, bucket);
+  }
+
+  // POST /api/v1/delete - 删除文件
+  // Body JSON: { fileId }
+  if (subPath === '/delete' && request.method === 'POST') {
+    const { fileId } = await request.json();
+    if (!fileId) return jsonResponse({ error: 'fileId is required' }, 400);
+
+    const metaKey = '_meta/' + fileId;
+    const meta = await bucket.get(metaKey);
+    if (!meta) return jsonResponse({ error: 'File not found' }, 404);
+
+    const metaData = JSON.parse(await meta.text());
+    await deleteFileWithChunks(bucket, metaData, metaKey);
+    return jsonResponse({ success: true, fileId });
+  }
+
+  return jsonResponse({ error: 'Not found' }, 404);
+}
+
+// PUT /api/v1/upload 实现
+async function handleApiV1Upload(request, bucket, baseUrl) {
+  const filename = request.headers.get('X-Filename');
+  if (!filename) {
+    return jsonResponse({ error: 'X-Filename header is required' }, 400);
+  }
+
+  const contentType = request.headers.get('Content-Type') || 'application/octet-stream';
+  const size = parseInt(request.headers.get('Content-Length') || '0', 10);
+  const expireMs = parseInt(request.headers.get('X-Expire-Ms') || '0', 10) || CONFIG.FILE_EXPIRE_TIME;
+  const sharePassword = request.headers.get('X-Share-Password') || '';
+
+  if (size > CONFIG.MAX_FILE_SIZE) {
+    return jsonResponse({ error: 'File too large', maxSize: CONFIG.MAX_FILE_SIZE }, 400);
+  }
+
+  // 存储空间检查
+  const storage = await collectStorageState(bucket, baseUrl, { includeFiles: false, countPending: true });
+  if (storage.remainingBytes <= 0) {
+    return jsonResponse({ error: '存储空间已满' }, 400);
+  }
+  if (size > 0 && size > storage.remainingBytes) {
+    return jsonResponse({ error: '剩余存储空间不足', remainingBytes: storage.remainingBytes }, 400);
+  }
+
+  const fileId = generateId();
+  const safeName = sanitizeFilename(filename);
+  const uploadTime = Date.now();
+  const expireTime = expireMs ? uploadTime + expireMs : 0;
+
+  let passwordHash = null;
+  let passwordSalt = null;
+  if (sharePassword && sharePassword.trim()) {
+    passwordSalt = generateSalt();
+    passwordHash = await hashPassword(sharePassword.trim(), passwordSalt);
+  }
+
+  const key = 'uploads/' + fileId + '/' + safeName;
+  const body = request.body;
+  if (!body) {
+    return jsonResponse({ error: 'No file data in request body' }, 400);
+  }
+
+  await bucket.put(key, body, {
+    httpMetadata: { contentType },
+    customMetadata: { fileid: fileId, originalname: safeName }
+  });
+
+  await bucket.put('_meta/' + fileId, JSON.stringify({
+    filename: safeName,
+    size: size || 0,
+    type: contentType,
+    uploadTime,
+    expireTime,
+    passwordHash,
+    passwordSalt,
+    key,
+    uploaded: true
+  }));
+
+  return jsonResponse({
+    success: true,
+    fileId,
+    filename: safeName,
+    size: size || 0,
+    downloadUrl: baseUrl + '/d/' + fileId,
+    expireTime
+  });
+}
+
+// POST /api/v1/upload-url 实现
+async function handleApiV1UploadUrl(request, env, bucket, baseUrl) {
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return jsonResponse({ error: 'Invalid JSON body' }, 400);
+  }
+
+  const { url: fileUrl, filename, expireMs, sharePassword } = body;
+  if (!fileUrl) {
+    return jsonResponse({ error: 'url is required' }, 400);
+  }
+
+  // 从 URL 下载文件
+  let resp;
+  try {
+    resp = await fetch(fileUrl, {
+      headers: { 'User-Agent': 'New-File-Transfer/1.0' }
+    });
+  } catch (e) {
+    return jsonResponse({ error: 'Failed to fetch URL: ' + e.message }, 400);
+  }
+
+  if (!resp.ok) {
+    return jsonResponse({ error: 'Failed to fetch URL: HTTP ' + resp.status }, 400);
+  }
+
+  const contentLength = parseInt(resp.headers.get('content-length') || '0', 10);
+  const contentType = resp.headers.get('content-type') || 'application/octet-stream';
+
+  // 从 URL 提取文件名（如果没有指定）
+  let resolvedFilename = filename;
+  if (!resolvedFilename) {
+    try {
+      const urlObj = new URL(fileUrl);
+      const pathParts = urlObj.pathname.split('/').filter(Boolean);
+      resolvedFilename = pathParts.length > 0 ? decodeURIComponent(pathParts[pathParts.length - 1]) : 'download';
+    } catch (e) {
+      resolvedFilename = 'download';
+    }
+  }
+
+  if (contentLength > CONFIG.MAX_FILE_SIZE) {
+    return jsonResponse({ error: 'Remote file too large', maxSize: CONFIG.MAX_FILE_SIZE }, 400);
+  }
+
+  // 存储空间检查
+  const storage = await collectStorageState(bucket, baseUrl, { includeFiles: false, countPending: true });
+  if (storage.remainingBytes <= 0) {
+    return jsonResponse({ error: '存储空间已满' }, 400);
+  }
+  if (contentLength > 0 && contentLength > storage.remainingBytes) {
+    return jsonResponse({ error: '剩余存储空间不足', remainingBytes: storage.remainingBytes }, 400);
+  }
+
+  const fileId = generateId();
+  const safeName = sanitizeFilename(resolvedFilename);
+  const uploadTime = Date.now();
+  const actualExpireMs = expireMs || CONFIG.FILE_EXPIRE_TIME;
+  const expireTime = actualExpireMs ? uploadTime + actualExpireMs : 0;
+
+  let passwordHash = null;
+  let passwordSalt = null;
+  if (sharePassword && sharePassword.trim()) {
+    passwordSalt = generateSalt();
+    passwordHash = await hashPassword(sharePassword.trim(), passwordSalt);
+  }
+
+  const key = 'uploads/' + fileId + '/' + safeName;
+
+  if (!resp.body) {
+    return jsonResponse({ error: 'No response body from URL' }, 400);
+  }
+
+  await bucket.put(key, resp.body, {
+    httpMetadata: { contentType },
+    customMetadata: { fileid: fileId, originalname: safeName, sourceUrl: fileUrl }
+  });
+
+  await bucket.put('_meta/' + fileId, JSON.stringify({
+    filename: safeName,
+    size: contentLength || 0,
+    type: contentType,
+    uploadTime,
+    expireTime,
+    passwordHash,
+    passwordSalt,
+    key,
+    uploaded: true
+  }));
+
+  return jsonResponse({
+    success: true,
+    fileId,
+    filename: safeName,
+    size: contentLength || 0,
+    downloadUrl: baseUrl + '/d/' + fileId,
+    sourceUrl: fileUrl,
+    expireTime
+  });
+}
+
+// GET /api/v1/download/:fileId 实现
+async function handleApiV1Download(fileId, bucket) {
+  if (!fileId) {
+    return jsonResponse({ error: 'fileId is required' }, 400);
+  }
+
+  const metaKey = '_meta/' + fileId;
+  const meta = await bucket.get(metaKey);
+  if (!meta) {
+    return jsonResponse({ error: 'File not found' }, 404);
+  }
+
+  const metaData = JSON.parse(await meta.text());
+
+  // 检查过期
+  if (metaData.expireTime && metaData.expireTime < Date.now()) {
+    await deleteFileWithChunks(bucket, metaData, metaKey);
+    return jsonResponse({ error: 'File expired' }, 410);
+  }
+
+  if (!metaData.uploaded) {
+    return jsonResponse({ error: 'File upload incomplete' }, 400);
+  }
+
+  return serveFile(bucket, metaData);
 }
 
 // ==================== 密码验证处理 ====================

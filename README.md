@@ -26,6 +26,7 @@
 - 顶部状态卡改为显示剩余存储空间
 - 新增存储空间统计逻辑，按 10GB 总容量计算已用/剩余空间
 - 当存储空间已满，或待上传文件大于剩余空间时，前后端都会阻止上传
+- **新增 API v1 程序化接口**（`/api/v1/*`），支持 API Key 认证的上传/下载/URL抓取/文件管理
 
 ## 效果图
 
@@ -41,6 +42,7 @@
 - 临时下载直链
 - 二维码分享
 - 多文件并发上传
+- **API v1 程序化接口**（API Key 认证，支持上传/下载/URL抓取）
 
 ## 项目结构
 
@@ -109,6 +111,7 @@ const CONFIG = {
   MAX_CONCURRENT_UPLOADS: 3,
   CHUNK_SIZE: 50 * 1024 * 1024,
   MULTIPART_THRESHOLD: 100 * 1024 * 1024,
+  API_KEY: '',
 };
 ```
 
@@ -124,6 +127,7 @@ const CONFIG = {
 - `MAX_CONCURRENT_UPLOADS`：前端并发上传文件数
 - `CHUNK_SIZE`：分片大小
 - `MULTIPART_THRESHOLD`：超过该大小自动走分片上传
+- `API_KEY`：程序化接口密钥，用于 `/api/v1/*` 端点认证，留空则 v1 接口返回 503
 
 ## 当前行为说明
 
@@ -195,6 +199,113 @@ Content-Type: application/json
 
 {
   "fileId": "..."
+}
+```
+
+## API v1 程序化接口（需 API Key）
+
+所有 `/api/v1/*` 接口需要在请求头中携带 `X-API-Key`，值与 `CONFIG.API_KEY` 一致。
+如果 `CONFIG.API_KEY` 为空，所有 v1 接口将返回 503。
+
+### 直接上传文件
+
+```http
+PUT /api/v1/upload
+X-API-Key: your-api-key
+X-Filename: example.apk
+Content-Type: application/octet-stream
+X-Expire-Ms: 604800000
+X-Share-Password: optional-password
+
+<raw file binary content>
+```
+
+- `X-Filename`：**必填**，文件名
+- `Content-Type`：可选，默认 `application/octet-stream`
+- `X-Expire-Ms`：可选，过期时间（毫秒），默认使用 `CONFIG.FILE_EXPIRE_TIME`
+- `X-Share-Password`：可选，分享密码
+- Body 为文件的原始二进制内容
+
+响应示例：
+```json
+{
+  "success": true,
+  "fileId": "abc123",
+  "filename": "example.apk",
+  "size": 10485760,
+  "downloadUrl": "https://your-domain/d/abc123",
+  "expireTime": 1719500000000
+}
+```
+
+### 从 URL 下载并上传
+
+```http
+POST /api/v1/upload-url
+X-API-Key: your-api-key
+Content-Type: application/json
+
+{
+  "url": "https://example.com/file.apk",
+  "filename": "custom-name.apk",
+  "expireMs": 604800000,
+  "sharePassword": "optional-password"
+}
+```
+
+- `url`：**必填**，要下载的文件 URL
+- `filename`：可选，自定义文件名（不填则从 URL 提取）
+- `expireMs`：可选，过期时间（毫秒）
+- `sharePassword`：可选，分享密码
+
+Worker 会从该 URL 下载文件内容并存储到 R2，支持大文件流式传输。
+
+响应示例：
+```json
+{
+  "success": true,
+  "fileId": "def456",
+  "filename": "custom-name.apk",
+  "size": 52428800,
+  "downloadUrl": "https://your-domain/d/def456",
+  "sourceUrl": "https://example.com/file.apk",
+  "expireTime": 1719500000000
+}
+```
+
+### 直接下载文件
+
+```http
+GET /api/v1/download/:fileId
+X-API-Key: your-api-key
+```
+
+直接返回文件的二进制内容流，`Content-Type` 和 `Content-Disposition` 与原始上传一致。
+可用于程序化下载，无需经过页面验证。
+
+### 列出所有文件
+
+```http
+GET /api/v1/files
+X-API-Key: your-api-key
+```
+
+### 查看存储空间
+
+```http
+GET /api/v1/storage
+X-API-Key: your-api-key
+```
+
+### 删除文件
+
+```http
+POST /api/v1/delete
+X-API-Key: your-api-key
+Content-Type: application/json
+
+{
+  "fileId": "abc123"
 }
 ```
 
