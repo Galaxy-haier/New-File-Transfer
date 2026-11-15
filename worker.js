@@ -40,6 +40,27 @@ const CONFIG = {
   CHUNK_SIZE: 50 * 1024 * 1024,
   // 启用分片上传的文件大小阈值（字节）默认 100MB
   MULTIPART_THRESHOLD: 100 * 1024 * 1024,
+
+  // ==================== WebDAV 配置（配置同步用）====================
+  // 是否启用 WebDAV 接口（对外暴露 /dav 挂载点，文件存 R2）
+  WEBDAV_ENABLED: true,
+
+  // WebDAV 挂载点 URL 前缀（客户端连接地址为 https://your-domain/dav/）
+  WEBDAV_PATH: '/dav',
+
+  // WebDAV 文件在 R2 中的存储前缀（与网页上传的 uploads/ 隔离）
+  WEBDAV_ROOT_KEY: 'dav/',
+
+  // WebDAV 认证用户名
+  WEBDAV_USERNAME: 'admin',
+
+  // WebDAV 认证密码：留空则读取环境变量 WEBDAV_PASSWORD（推荐），
+  // 也可直接填在这里（会明文打包进脚本，仅本地测试建议）
+  WEBDAV_PASSWORD: '',
+
+  // WebDAV 单文件大小上限（字节）。配置同步场景普遍很小，默认 10MB，
+  // 注意 Cloudflare Workers 免费版单请求体上限约 100MB
+  WEBDAV_MAX_FILE_SIZE: 10 * 1024 * 1024,
 };
 
 const FAVICON_DATA_URL = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%2338BDF8' d='M8 16.5A4.5 4.5 0 0 1 12.5 12H25l5.2 5.2H51.5A4.5 4.5 0 0 1 56 21.7v24.8A5.5 5.5 0 0 1 50.5 52h-37A5.5 5.5 0 0 1 8 46.5v-30Z'/%3E%3Cpath fill='%230EA5E9' d='M8 24.5A5.5 5.5 0 0 1 13.5 19H50.2A5.8 5.8 0 0 1 56 24.8v21.7A5.5 5.5 0 0 1 50.5 52h-37A5.5 5.5 0 0 1 8 46.5v-22Z'/%3E%3C/svg%3E";
@@ -50,7 +71,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-  <title>文件中转站 |New File Transfer</title>
+  <title>文件中转站 | New File Transfer</title>
   <link rel="icon" href="${FAVICON_DATA_URL}">
   <!-- QR Code Generator 库 -->
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
@@ -481,11 +502,21 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       font-weight: 500;
     }
     
-    .btn-qr { 
-      background: var(--accent-purple); 
-      color: white; 
+    .btn-download {
+      background: var(--accent-cyan);
+      color: white;
     }
-    .btn-qr:hover { 
+    .btn-download:hover {
+      background: #0891b2;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3);
+    }
+
+    .btn-qr {
+      background: var(--accent-purple);
+      color: white;
+    }
+    .btn-qr:hover {
       background: #7c3aed;
       transform: translateY(-1px);
       box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
@@ -502,7 +533,8 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
     }
     .btn-delete:disabled,
-    .btn-qr:disabled {
+    .btn-qr:disabled,
+    .btn-download:disabled {
       opacity: 0.6;
       cursor: not-allowed;
       transform: none;
@@ -766,12 +798,13 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       to { transform: translateX(0); opacity: 1; }
     }
     
-    /* Password Modal */
+    /* Password Modal（毛玻璃：透出并模糊后方页面） */
     .password-modal {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.8);
-      backdrop-filter: blur(10px);
+      background: rgba(10, 10, 15, 0.45);
+      backdrop-filter: blur(18px) saturate(1.2);
+      -webkit-backdrop-filter: blur(18px) saturate(1.2);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -779,15 +812,16 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     }
     
     .password-box {
-      background: var(--bg-card);
-      backdrop-filter: blur(20px);
-      border: 1px solid var(--border-color);
+      background: rgba(30, 30, 45, 0.55);
+      backdrop-filter: blur(28px) saturate(1.3);
+      -webkit-backdrop-filter: blur(28px) saturate(1.3);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.08);
       padding: 40px;
       border-radius: 20px;
       text-align: center;
       max-width: 420px;
       width: 90%;
-      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
     }
     
     .password-box h2 {
@@ -903,6 +937,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     <div class="header">
       <h1>📁 文件中转站</h1>
       <p>安全、快速的文件分享服务</p>
+      <p style="margin-top:12px"><a href="/dav-ui" style="display:inline-flex;align-items:center;gap:6px;color:var(--accent-cyan);font-size:14px;text-decoration:none;border:1px solid rgba(6,182,212,0.35);background:rgba(6,182,212,0.08);padding:8px 18px;border-radius:20px;transition:all 0.2s ease;">🗂 WebDAV 同步管理</a></p>
     </div>
     
     <!-- Stats Grid -->
@@ -925,11 +960,32 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       <div class="password-box">
         <div style="font-size: 64px; margin-bottom: 16px;">🔐</div>
         <h2>访问受限</h2>
-        <p>请输入访问密码以继续使用</p>
-        <input type="password" class="password-input" id="passwordInput" placeholder="输入密码..." autofocus>
+        <p>请输入账号与密码以继续使用</p>
+        <input type="text" class="password-input" id="loginUsername" placeholder="账号" autocomplete="username" style="margin-bottom:12px">
+        <input type="password" class="password-input" id="passwordInput" placeholder="密码..." autocomplete="current-password">
         <button class="btn-primary" onclick="verifyPassword()">进入系统</button>
       </div>
     </div>
+
+    <div id="settingsModal" class="password-modal hidden">
+      <div class="password-box" style="text-align:left">
+        <div style="font-size:48px;margin-bottom:12px;text-align:center">⚙️</div>
+        <h2 style="text-align:center;margin-bottom:20px">设置</h2>
+        <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:6px">账号</label>
+        <input type="text" class="password-input" id="setAuthUser" placeholder="登录账号" style="margin-bottom:14px">
+        <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:6px">新密码（留空则不修改）</label>
+        <input type="password" class="password-input" id="setNewPassword" placeholder="新密码" autocomplete="new-password" style="margin-bottom:14px">
+        <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:6px">网站背景（https 图片地址或 WebDAV 图片路径，如 /dav/wallpaper.jpg，留空恢复默认）</label>
+        <input type="text" class="password-input" id="setBgUrl" placeholder="https://... 或 /dav/xxx.jpg" style="margin-bottom:18px">
+        <button class="btn-primary" id="settingsSaveBtn" style="margin-bottom:10px">保存设置</button>
+        <button class="btn-primary" id="settingsCloseBtn" style="background:rgba(255,255,255,0.1)">关闭</button>
+      </div>
+    </div>
+
+    <button id="settingsBtn" title="设置" style="position:fixed;top:16px;right:72px;z-index:1500;width:42px;height:42px;border-radius:12px;border:1px solid var(--border-color);background:rgba(30,30,45,0.7);backdrop-filter:blur(10px);color:var(--text-primary);font-size:19px;cursor:pointer;transition:all 0.2s ease;">⚙</button>
+    <button id="logoutBtn" title="退出登录" style="position:fixed;top:16px;right:16px;z-index:1500;width:42px;height:42px;border-radius:12px;border:1px solid var(--border-color);background:rgba(30,30,45,0.7);backdrop-filter:blur(10px);color:var(--text-primary);cursor:pointer;transition:all 0.2s ease;display:flex;align-items:center;justify-content:center;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>
 
     <div id="qrShareModal" class="qr-modal hidden" aria-hidden="true">
       <div class="qr-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="qrModalTitle">
@@ -1292,7 +1348,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     function setResultActionsDisabled(fileId, disabled) {
       const itemDiv = fileItemsMap.get(fileId);
       if (!itemDiv) return;
-      itemDiv.querySelectorAll('.btn-qr, .btn-delete').forEach((btn) => {
+      itemDiv.querySelectorAll('.btn-qr, .btn-delete, .btn-download').forEach((btn) => {
         btn.disabled = disabled;
       });
     }
@@ -1490,7 +1546,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 
       const passwordBadge = hasPassword ? '<span class="password-badge">🔒 密码保护</span>' : '';
       const safeUrl = escapeClientHtml(downloadUrl || '');
-      resultDiv.innerHTML = '<div class="file-result-link"><input class="download-link-input" type="text" readonly value="' + safeUrl + '"></div><div class="file-result-actions"><button class="btn-sm btn-qr" type="button">🔲 分享二维码</button><button class="btn-sm btn-delete" type="button">🗑 删除</button></div>' + passwordBadge;
+      resultDiv.innerHTML = '<div class="file-result-link"><input class="download-link-input" type="text" readonly value="' + safeUrl + '"></div><div class="file-result-actions"><button class="btn-sm btn-download" type="button">⬇ 下载</button><button class="btn-sm btn-qr" type="button">🔗 分享</button><button class="btn-sm btn-delete" type="button">🗑 删除</button></div>' + passwordBadge;
       resultDiv.style.display = 'flex';
       resultDiv.style.flexWrap = '';
 
@@ -1500,6 +1556,14 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       if (linkInput) {
         linkInput.addEventListener('click', () => {
           linkInput.select();
+        });
+      }
+
+      const dlBtn = resultDiv.querySelector('.btn-download');
+      if (dlBtn) {
+        dlBtn.addEventListener('click', () => {
+          // 直接打开分享链接：无密码文件直接触发下载，有密码文件显示密码输入页
+          window.open(downloadUrl, '_blank');
         });
       }
 
@@ -1799,21 +1863,118 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       };
     }
 
+    function showLoginModal() {
+      document.getElementById('passwordModal').classList.remove('hidden');
+    }
+
+    function applySiteBackground() {
+      const cfg = (typeof window.__SITE_CFG__ === 'object' && window.__SITE_CFG__) || {};
+      const bgUrl = (cfg.bgUrl || '').trim();
+      if (!bgUrl) return;
+      const safeUrl = bgUrl.replace(/[^a-zA-Z0-9:/._~?&=%-]/g, '');
+      document.body.style.backgroundImage =
+        'linear-gradient(rgba(10,10,15,0.82), rgba(10,10,15,0.82)), url("' + safeUrl + '")';
+      document.body.style.backgroundSize = 'cover';
+      document.body.style.backgroundPosition = 'center';
+      document.body.style.backgroundAttachment = 'fixed';
+    }
+
+    async function loadSiteConfig() {
+      try {
+        const res = await fetch('/api/settings');
+        const data = await res.json();
+        window.__SITE_CFG__ = { bgUrl: data.bgUrl || '', authUser: data.authUser || '' };
+        applySiteBackground();
+      } catch (e) { /* 忽略 */ }
+    }
+
+    function setupLogoutButton() {
+      const btn = document.getElementById('logoutBtn');
+      if (!btn || btn.dataset.bound === '1') return;
+      btn.addEventListener('click', async () => {
+        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+        location.reload();
+      });
+      btn.dataset.bound = '1';
+    }
+
+    function setupSettingsModal() {
+      const modal = document.getElementById('settingsModal');
+      const btn = document.getElementById('settingsBtn');
+      if (!modal || !btn || modal.dataset.bound === '1') return;
+
+      setupLogoutButton();
+
+      btn.addEventListener('click', async () => {
+        await loadSiteConfig();
+        const cfg = window.__SITE_CFG__ || {};
+        document.getElementById('setAuthUser').value = cfg.authUser || '';
+        document.getElementById('setNewPassword').value = '';
+        document.getElementById('setBgUrl').value = cfg.bgUrl || '';
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+      });
+
+      document.getElementById('settingsCloseBtn').addEventListener('click', () => {
+        modal.classList.add('hidden');
+        document.body.style.overflow = '';
+      });
+
+      document.getElementById('settingsSaveBtn').addEventListener('click', async () => {
+        const saveBtn = document.getElementById('settingsSaveBtn');
+        const userVal = document.getElementById('setAuthUser').value.trim();
+        const passVal = document.getElementById('setNewPassword').value;
+        const bgVal = document.getElementById('setBgUrl').value.trim();
+        if (!userVal) { showToast('账号不能为空', 'error'); return; }
+        if (passVal && passVal.length < 4) { showToast('密码至少 4 位', 'error'); return; }
+        saveBtn.disabled = true;
+        saveBtn.textContent = '保存中...';
+        try {
+          const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ authUser: userVal, newPassword: passVal || undefined, bgUrl: bgVal })
+          });
+          const data = await res.json();
+          if (!res.ok || data.error) throw new Error(data.error || '保存失败');
+          window.__SITE_CFG__ = { bgUrl: data.bgUrl || '', authUser: data.authUser || userVal };
+          applySiteBackground();
+          showToast('设置已保存', 'success');
+          modal.classList.add('hidden');
+          document.body.style.overflow = '';
+        } catch (err) {
+          showToast('保存失败: ' + err.message, 'error');
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = '保存设置';
+        }
+      });
+
+      modal.dataset.bound = '1';
+    }
+
     window.verifyPassword = async function() {
       const input = document.getElementById('passwordInput');
+      const userInput = document.getElementById('loginUsername');
       const password = input.value;
+      const username = userInput ? userInput.value.trim() : '';
+      if (!username || !password) {
+        showToast('请输入账号和密码', 'error');
+        return;
+      }
       try {
-        const res = await fetch('/api/verify', {
+        const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password })
+          body: JSON.stringify({ username, password })
         });
         const data = await res.json();
         if (data.success) {
           document.getElementById('passwordModal').classList.add('hidden');
           initApp();
+          applySiteBackground();
         } else {
-          showToast('密码错误', 'error');
+          showToast(data.error || '账号或密码错误', 'error');
         }
       } catch (e) {
         showToast('验证失败', 'error');
@@ -1830,8 +1991,19 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      if (CONFIG.ACCESS_PASSWORD) {
-        document.getElementById('passwordModal').classList.remove('hidden');
+      setupSettingsModal();
+      const pwInput = document.getElementById('passwordInput');
+      const userInput = document.getElementById('loginUsername');
+      if (pwInput) {
+        pwInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') verifyPassword(); });
+      }
+      if (userInput) {
+        userInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') document.getElementById('passwordInput').focus(); });
+      }
+      // 背景配置始终加载（登录页也需要背景）
+      loadSiteConfig();
+      if (window.__AUTH_REQUIRED__ && !window.__LOGGED_IN__) {
+        showLoginModal();
       } else {
         initApp();
       }
@@ -1839,6 +2011,12 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
+
+// 主页 HTML 生成：根据登录状态注入标记（认证体系全局化后始终要求登录）
+function getIndexHtml(loggedIn) {
+  return HTML_TEMPLATE
+    .replace('<script>\n    const CONFIG = ', '<script>\n    window.__AUTH_REQUIRED__ = true;\n    window.__LOGGED_IN__ = ' + !!loggedIn + ';\n    const CONFIG = ');
+}
 
 // ==================== 工具函数 ====================
 
@@ -2471,9 +2649,611 @@ function getFileDetailHtml(fileId, fileName, fileSize, hasPassword, uploadTime) 
 </html>`;
 }
 
+// ==================== WebDAV 管理界面 ====================
+
+function getWebDavUiHtml() {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebDAV 同步管理 | New File Transfer</title>
+  <link rel="icon" href="${FAVICON_DATA_URL}">
+  <style>
+    :root {
+      --bg-primary: #0a0a0f;
+      --bg-card: rgba(30, 30, 45, 0.6);
+      --border-color: rgba(255, 255, 255, 0.1);
+      --text-primary: #ffffff;
+      --text-secondary: #a0a0b0;
+      --accent-purple: #8b5cf6;
+      --accent-cyan: #06b6d4;
+      --accent-pink: #ec4899;
+      --success: #10b981;
+      --error: #ef4444;
+      --warning: #f59e0b;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      min-height: 100vh;
+      padding: 24px;
+      color: var(--text-primary);
+      background-image:
+        radial-gradient(ellipse at 20% 20%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 80%, rgba(6, 182, 212, 0.1) 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 50%, rgba(59, 130, 246, 0.05) 0%, transparent 70%);
+    }
+    .container { max-width: 1000px; margin: 0 auto; }
+    .header { text-align: center; margin-bottom: 32px; padding: 20px 0; }
+    .header h1 {
+      font-size: 2.5rem; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.02em;
+      background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-purple) 50%, var(--accent-pink) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+    .header p { color: var(--text-secondary); font-size: 1rem; }
+    .header a.back-link {
+      display: inline-flex; align-items: center; gap: 6px; margin-top: 12px;
+      color: var(--accent-cyan); font-size: 13px; text-decoration: none;
+      border: 1px solid rgba(6,182,212,0.35); background: rgba(6,182,212,0.08);
+      padding: 7px 16px; border-radius: 20px; transition: all 0.2s ease;
+    }
+    .header a.back-link:hover { background: rgba(6,182,212,0.16); }
+
+    .card {
+      background: var(--bg-card); backdrop-filter: blur(20px);
+      border: 1px solid var(--border-color); border-radius: 20px;
+      padding: 24px; margin-bottom: 20px;
+    }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
+    .btn {
+      padding: 9px 16px; font-size: 13px; border: none; border-radius: 10px;
+      cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
+      transition: all 0.2s ease; color: #fff;
+    }
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,0.3); }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; box-shadow: none; }
+    .btn-mkdir { background: var(--accent-purple); }
+    .btn-upload { background: var(--accent-blue, #3b82f6); }
+    .btn-refresh { background: rgba(255,255,255,0.10); }
+    .btn-logout { background: rgba(239,68,68,0.16); color: #fca5a5; }
+    .toolbar input[type="text"] {
+      flex: 1 1 220px; padding: 9px 14px; font-size: 13px;
+      background: rgba(0,0,0,0.35); border: 1px solid var(--border-color);
+      border-radius: 10px; color: var(--text-primary);
+    }
+    .toolbar input[type="text"]:focus { outline: none; border-color: var(--accent-cyan); }
+
+    /* 面包屑 */
+    .breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 16px; font-size: 14px; }
+    .breadcrumb a { color: var(--accent-cyan); text-decoration: none; padding: 3px 8px; border-radius: 8px; }
+    .breadcrumb a:hover { background: rgba(6,182,212,0.12); }
+    .breadcrumb .sep { color: var(--text-secondary); opacity: 0.6; }
+    .breadcrumb .current { color: var(--text-primary); padding: 3px 8px; font-weight: 600; }
+
+    /* 文件表格 */
+    .file-table { width: 100%; border-collapse: collapse; }
+    .file-table th {
+      text-align: left; font-size: 12px; color: var(--text-secondary);
+      text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 10px 12px; border-bottom: 1px solid var(--border-color);
+    }
+    .file-table td { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 14px; }
+    .file-table tr.row { cursor: pointer; transition: background 0.15s ease; }
+    .file-table tr.row:hover { background: rgba(139,92,246,0.07); }
+    .file-table .icon { width: 30px; font-size: 18px; }
+    .file-table .name { word-break: break-all; color: var(--text-primary); }
+    .file-table .meta { color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
+    .file-table .actions { text-align: right; white-space: nowrap; }
+    .row-actions { display: inline-flex; gap: 6px; }
+    .icon-btn {
+      padding: 6px 10px; font-size: 12px; border-radius: 8px; border: none; cursor: pointer;
+      background: rgba(255,255,255,0.08); color: var(--text-secondary); transition: all 0.15s ease;
+    }
+    .icon-btn:hover { background: rgba(255,255,255,0.16); color: var(--text-primary); }
+    .icon-btn.danger { background: rgba(239,68,68,0.14); color: #fca5a5; }
+    .icon-btn.danger:hover { background: rgba(239,68,68,0.24); }
+
+    .empty-state { text-align: center; padding: 44px 16px; color: var(--text-secondary); }
+    .empty-state .icon { font-size: 44px; margin-bottom: 12px; opacity: 0.5; }
+
+    /* 登录/设置弹窗（毛玻璃：透出并模糊后方页面） */
+    .login-modal {
+      position: fixed; inset: 0; background: rgba(10,10,15,0.45);
+      backdrop-filter: blur(18px) saturate(1.2);
+      -webkit-backdrop-filter: blur(18px) saturate(1.2);
+      display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 24px;
+    }
+    .login-box {
+      background: rgba(30, 30, 45, 0.55);
+      backdrop-filter: blur(28px) saturate(1.3);
+      -webkit-backdrop-filter: blur(28px) saturate(1.3);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.08);
+      border-radius: 20px; padding: 36px; width: 100%; max-width: 400px; text-align: center;
+    }
+    .login-box h2 { margin-bottom: 6px; font-size: 1.4rem; }
+    .login-box p { color: var(--text-secondary); font-size: 13px; margin-bottom: 22px; }
+    .login-box input {
+      width: 100%; padding: 12px 16px; margin-bottom: 14px; font-size: 15px;
+      background: rgba(0,0,0,0.4); border: 1px solid var(--border-color);
+      border-radius: 12px; color: var(--text-primary);
+    }
+    .login-box input:focus { outline: none; border-color: var(--accent-purple); }
+    .login-box .btn { width: 100%; justify-content: center; padding: 13px; background: linear-gradient(135deg, var(--accent-purple), var(--accent-cyan)); }
+
+    /* Toast */
+    .toast {
+      position: fixed; top: 24px; right: 24px; padding: 14px 22px; border-radius: 12px;
+      color: #fff; font-weight: 500; z-index: 2300; font-size: 14px; max-width: 380px;
+      backdrop-filter: blur(20px); animation: slideIn 0.3s ease;
+    }
+    .toast.success { background: rgba(16,185,129,0.9); }
+    .toast.error { background: rgba(239,68,68,0.9); }
+    .toast.info { background: rgba(59,130,246,0.9); }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    /* 确认弹窗 */
+    .confirm-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(10px);
+      display: flex; align-items: center; justify-content: center; z-index: 2200; padding: 24px;
+    }
+    .confirm-box {
+      background: linear-gradient(180deg, rgba(30,30,45,0.97), rgba(18,18,26,0.98));
+      border: 1px solid rgba(239,68,68,0.2); border-radius: 20px; padding: 26px;
+      width: 100%; max-width: 400px;
+    }
+    .confirm-box h3 { margin-bottom: 10px; font-size: 1.15rem; }
+    .confirm-box p { color: var(--text-secondary); font-size: 14px; margin-bottom: 20px; word-break: break-all; }
+    .confirm-box .actions { display: flex; justify-content: flex-end; gap: 10px; }
+    .confirm-box .btn-cancel {
+      padding: 10px 16px; border-radius: 10px; border: none; cursor: pointer; font-size: 14px;
+      background: rgba(255,255,255,0.08); color: var(--text-primary);
+    }
+    .confirm-box .btn-ok {
+      padding: 10px 16px; border-radius: 10px; border: none; cursor: pointer; font-size: 14px; font-weight: 600;
+      background: linear-gradient(135deg, rgba(239,68,68,0.95), rgba(220,38,38,0.95)); color: #fff;
+    }
+
+    @media (max-width: 640px) {
+      body { padding: 14px; }
+      .file-table th:nth-child(2), .file-table td:nth-child(2) { display: none; }
+      .toolbar { gap: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🗂 WebDAV 同步管理</h1>
+      <p>查看与管理 WebDAV 同步到 R2 的配置文件（存储前缀 dav/）</p>
+      <a class="back-link" href="/">📁 文件中转站</a>
+    </div>
+
+    <div class="card" id="browserCard" style="display:none">
+      <div class="toolbar">
+        <button class="btn btn-mkdir" id="mkdirBtn">📁 新建文件夹</button>
+        <button class="btn btn-upload" id="uploadBtn">⬆ 上传文件</button>
+        <button class="btn btn-refresh" id="refreshBtn">🔄 刷新</button>
+        <input type="text" id="pathInput" placeholder="/路径/文件夹（回车跳转）">
+        <input type="file" id="uploadInput" multiple style="display:none">
+      </div>
+
+      <div class="breadcrumb" id="breadcrumb"></div>
+
+      <table class="file-table">
+        <thead>
+          <tr><th>名称</th><th style="width:120px">大小</th><th style="width:170px">修改时间</th><th></th></tr>
+        </thead>
+        <tbody id="fileRows"></tbody>
+      </table>
+      <div class="empty-state" id="emptyState" style="display:none">
+        <div class="icon">📂</div>
+        <div>此目录为空</div>
+      </div>
+    </div>
+
+    <div id="settingsModal" class="login-modal" style="display:none">
+      <div class="login-box" style="text-align:left">
+        <div style="font-size:48px;margin-bottom:12px;text-align:center">⚙️</div>
+        <h2 style="text-align:center;margin-bottom:20px">设置</h2>
+        <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:6px">账号</label>
+        <input type="text" id="setAuthUser" placeholder="登录账号" style="margin-bottom:14px">
+        <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:6px">新密码（留空则不修改）</label>
+        <input type="password" id="setNewPassword" placeholder="新密码" autocomplete="new-password" style="margin-bottom:14px">
+        <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:6px">网站背景（https 图片地址或 WebDAV 图片路径，留空恢复默认）</label>
+        <input type="text" id="setBgUrl" placeholder="https://... 或 /dav/xxx.jpg" style="margin-bottom:18px">
+        <button class="btn" id="settingsSaveBtn" style="width:100%;justify-content:center;background:linear-gradient(135deg,var(--accent-purple),var(--accent-cyan));margin-bottom:10px">保存设置</button>
+        <button class="btn" id="settingsCloseBtn" style="width:100%;justify-content:center;background:rgba(255,255,255,0.1)">关闭</button>
+      </div>
+    </div>
+
+    <div id="confirmModal" class="confirm-modal" style="display:none">
+      <div class="confirm-box">
+        <h3 id="confirmTitle">确认删除</h3>
+        <p id="confirmDesc"></p>
+        <div class="actions">
+          <button class="btn-cancel" id="confirmCancel">取消</button>
+          <button class="btn-ok" id="confirmOk">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <button id="settingsBtn" title="设置" style="position:fixed;top:16px;right:72px;z-index:1500;width:42px;height:42px;border-radius:12px;border:1px solid var(--border-color);background:rgba(30,30,45,0.7);backdrop-filter:blur(10px);color:var(--text-primary);font-size:19px;cursor:pointer;transition:all 0.2s ease;">⚙</button>
+    <button id="logoutBtn" title="退出登录" style="position:fixed;top:16px;right:16px;z-index:1500;width:42px;height:42px;border-radius:12px;border:1px solid var(--border-color);background:rgba(30,30,45,0.7);backdrop-filter:blur(10px);color:var(--text-primary);cursor:pointer;transition:all 0.2s ease;display:flex;align-items:center;justify-content:center;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>
+  </div>
+
+  <script>
+    var WEBDAV_BASE = '/dav';
+    // 全局认证：浏览器端凭服务端签发的会话 Cookie，无需 Basic Auth 头
+    var currentPath = '/';
+    var items = [];
+
+    function authHeader() {
+      return {};
+    }
+
+    function showToast(msg, type) {
+      var t = document.createElement('div');
+      t.className = 'toast ' + (type || 'info');
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(function(){ t.remove(); }, 3000);
+    }
+
+    function formatSize(b) {
+      if (!b) return '-';
+      var k = 1024, sizes = ['B','KB','MB','GB'];
+      var i = Math.floor(Math.log(b) / Math.log(k));
+      return parseFloat((b / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function formatTime(d) {
+      if (!d || isNaN(d)) return '-';
+      return d.toLocaleString('zh-CN');
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function(m) {
+        return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m];
+      });
+    }
+
+    function joinPath(dir, name) {
+      return dir.replace(/\\/+$/, '') + '/' + name;
+    }
+
+    /* ---- PROPFIND 解析（轻量正则解析 multistatus XML） ---- */
+    function parseMultistatus(xmlText) {
+      var results = [];
+      var responses = xmlText.split(/<D:response[\\s>]/i).slice(1);
+      for (var i = 0; i < responses.length; i++) {
+        var seg = responses[i].split('</D:response>')[0];
+        var hrefMatch = seg.match(/<D:href>([\\s\\S]*?)<\\/D:href>/i);
+        if (!hrefMatch) continue;
+        var href = hrefMatch[1];
+        var isDir = /<D:collection\\s*\\/>/i.test(seg) || /<D:collection>/i.test(seg);
+        var lenMatch = seg.match(/<D:getcontentlength>(\\d+)<\\/D:getcontentlength>/i);
+        var size = lenMatch ? parseInt(lenMatch[1], 10) : 0;
+        var modMatch = seg.match(/<D:getlastmodified>([\\s\\S]*?)<\\/D:getlastmodified>/i);
+        var mtime = modMatch ? new Date(modMatch[1]) : null;
+        var name = decodeURIComponent(href.replace(/\\/+$/, '').split('/').pop() || '');
+        // 自身项过滤：服务端返回的自身 href 可能带或不带尾斜杠，统一归一化后比较
+        var selfHref = WEBDAV_BASE + (currentPath === '/' ? '/' : currentPath);
+        if (href.replace(/\\/+$/, '') === selfHref.replace(/\\/+$/, '')) continue;
+        if (!name) continue;
+        results.push({ name: name, isDir: isDir, size: size, mtime: mtime, href: href });
+      }
+      results.sort(function(a, b) {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      return results;
+    }
+
+    async function listDir(path) {
+      var res = await fetch(WEBDAV_BASE + path, {
+        method: 'PROPFIND',
+        headers: Object.assign(authHeader(), { 'Depth': '1' })
+      });
+      if (res.status === 401) { redirectToLogin(); throw new Error('未授权'); }
+      if (!res.ok) throw new Error('PROPFIND ' + res.status);
+      var text = await res.text();
+      return parseMultistatus(text);
+    }
+
+    var renderSeq = 0; // 渲染序号：防止并发 render 互相叠加（快速刷新/跳转时）
+
+    async function render() {
+      var seq = ++renderSeq;
+      var rows = document.getElementById('fileRows');
+      var empty = document.getElementById('emptyState');
+      rows.innerHTML = '';
+      try {
+        var listed = await listDir(currentPath);
+        if (seq !== renderSeq) return; // 已有更新的渲染发起，丢弃本次过期结果
+        items = listed;
+      } catch (err) {
+        if (seq !== renderSeq) return;
+        if (err.message !== '未授权') showToast('读取目录失败: ' + err.message, 'error');
+        return;
+      }
+
+      renderBreadcrumb();
+      document.getElementById('pathInput').value = currentPath;
+
+      if (items.length === 0) {
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+
+      for (var i = 0; i < items.length; i++) {
+        (function(item) {
+          var tr = document.createElement('tr');
+          tr.className = 'row';
+          var displayName = item.isDir ? '📁 ' + escapeHtml(item.name) : '📄 ' + escapeHtml(item.name);
+          var actions = '';
+          if (!item.isDir) {
+            actions = '<div class="row-actions">' +
+              '<button class="icon-btn" data-act="copy">🔗 链接</button>' +
+              '<button class="icon-btn" data-act="download">⬇ 下载</button>' +
+              '<button class="icon-btn danger" data-act="delete">🗑</button>' +
+            '</div>';
+          } else {
+            actions = '<div class="row-actions">' +
+              '<button class="icon-btn danger" data-act="delete">🗑</button>' +
+            '</div>';
+          }
+          tr.innerHTML =
+            '<td class="name">' + displayName + '</td>' +
+            '<td class="meta">' + (item.isDir ? '目录' : formatSize(item.size)) + '</td>' +
+            '<td class="meta">' + formatTime(item.mtime) + '</td>' +
+            '<td class="actions">' + actions + '</td>';
+
+          tr.addEventListener('click', function(e) {
+            if (e.target.closest('.row-actions')) return;
+            if (item.isDir) {
+              currentPath = joinPath(currentPath, item.name) + '/';
+              render();
+            }
+          });
+          tr.querySelectorAll('.icon-btn').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+              e.stopPropagation();
+              var act = btn.dataset.act;
+              if (act === 'delete') confirmDelete(item);
+              else if (act === 'download') window.open(WEBDAV_BASE + joinPath(currentPath, encodeURIComponent(item.name)), '_blank');
+              else if (act === 'copy') copyLink(item);
+            });
+          });
+          rows.appendChild(tr);
+        })(items[i]);
+      }
+    }
+
+    function renderBreadcrumb() {
+      var bc = document.getElementById('breadcrumb');
+      bc.innerHTML = '';
+      var rootLink = document.createElement('a');
+      rootLink.textContent = '🏠 根目录';
+      rootLink.href = '#';
+      rootLink.addEventListener('click', function(e) { e.preventDefault(); currentPath = '/'; render(); });
+      bc.appendChild(rootLink);
+
+      var parts = currentPath.split('/').filter(Boolean);
+      var acc = '/';
+      for (var i = 0; i < parts.length; i++) {
+        acc = acc + parts[i] + '/';
+        var sep = document.createElement('span');
+        sep.className = 'sep'; sep.textContent = '›';
+        bc.appendChild(sep);
+        var link = document.createElement('a');
+        link.textContent = decodeURIComponent(parts[i]);
+        link.href = '#';
+        (function(p) {
+          link.addEventListener('click', function(e) { e.preventDefault(); currentPath = p; render(); });
+        })(acc);
+        bc.appendChild(link);
+      }
+      var cur = document.createElement('span');
+      cur.className = 'current'; cur.textContent = decodeURIComponent(parts[parts.length - 1] || '');
+      // 最后一项用高亮文本（上面已作为 link 加入，这里不重复加）
+    }
+
+    function confirmDelete(item) {
+      var modal = document.getElementById('confirmModal');
+      document.getElementById('confirmDesc').textContent =
+        '确认删除 "' + item.name + (item.isDir ? '/（整个目录）' : '') + '" 吗？该操作无法恢复。';
+      modal.style.display = 'flex';
+      var ok = document.getElementById('confirmOk');
+      var cancel = document.getElementById('confirmCancel');
+      ok.onclick = async function() {
+        modal.style.display = 'none';
+        try {
+          var target = WEBDAV_BASE + joinPath(currentPath, encodeURIComponent(item.name)) + (item.isDir ? '/' : '');
+          var res = await fetch(target, { method: 'DELETE', headers: authHeader() });
+          if (res.ok || res.status === 204 || res.status === 404) {
+            showToast('已删除: ' + item.name, 'success');
+          } else {
+            throw new Error('HTTP ' + res.status);
+          }
+        } catch (err) {
+          showToast('删除失败: ' + err.message, 'error');
+        }
+        render();
+      };
+      cancel.onclick = function() { modal.style.display = 'none'; };
+    }
+
+    async function copyLink(item) {
+      var url = location.origin + WEBDAV_BASE + joinPath(currentPath, encodeURIComponent(item.name));
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast('链接已复制', 'success');
+      } catch (e) {
+        showToast('复制失败: ' + url, 'error');
+      }
+    }
+
+    function redirectToLogin() {
+      location.href = '/';
+    }
+
+    function showBrowser() {
+      document.getElementById('browserCard').style.display = 'block';
+      render();
+    }
+
+    /* ---- 事件绑定 ---- */
+    document.getElementById('logoutBtn').addEventListener('click', async function() {
+      try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+      redirectToLogin();
+    });
+
+    function setupSettingsModal() {
+      var modal = document.getElementById('settingsModal');
+      var btn = document.getElementById('settingsBtn');
+      if (!modal || !btn || modal.dataset.bound === '1') return;
+
+      btn.addEventListener('click', async function() {
+        try {
+          var res = await fetch('/api/settings');
+          var data = await res.json();
+          document.getElementById('setAuthUser').value = data.authUser || '';
+          document.getElementById('setNewPassword').value = '';
+          document.getElementById('setBgUrl').value = data.bgUrl || '';
+        } catch (e) {}
+        modal.style.display = 'flex';
+      });
+
+      document.getElementById('settingsCloseBtn').addEventListener('click', function() {
+        modal.style.display = 'none';
+      });
+
+      document.getElementById('settingsSaveBtn').addEventListener('click', async function() {
+        var saveBtn = this;
+        var userVal = document.getElementById('setAuthUser').value.trim();
+        var passVal = document.getElementById('setNewPassword').value;
+        var bgVal = document.getElementById('setBgUrl').value.trim();
+        if (!userVal) { showToast('账号不能为空', 'error'); return; }
+        if (passVal && passVal.length < 4) { showToast('密码至少 4 位', 'error'); return; }
+        saveBtn.disabled = true; saveBtn.textContent = '保存中...';
+        try {
+          var res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ authUser: userVal, newPassword: passVal || undefined, bgUrl: bgVal })
+          });
+          var data = await res.json();
+          if (!res.ok || data.error) throw new Error(data.error || '保存失败');
+          showToast('设置已保存', 'success');
+          applySiteBackground(data.bgUrl || '');
+          modal.style.display = 'none';
+        } catch (err) {
+          showToast('保存失败: ' + err.message, 'error');
+        } finally {
+          saveBtn.disabled = false; saveBtn.textContent = '保存设置';
+        }
+      });
+
+      modal.dataset.bound = '1';
+    }
+
+    function applySiteBackground(bgUrl) {
+      var url = (bgUrl || '').trim();
+      if (!url) return;
+      var safeUrl = url.replace(/[^a-zA-Z0-9:/._~?&=%-]/g, '');
+      document.body.style.backgroundImage =
+        'linear-gradient(rgba(10,10,15,0.82), rgba(10,10,15,0.82)), url("' + safeUrl + '")';
+      document.body.style.backgroundSize = 'cover';
+      document.body.style.backgroundPosition = 'center';
+      document.body.style.backgroundAttachment = 'fixed';
+    }
+
+    async function loadSiteBackground() {
+      try {
+        var res = await fetch('/api/settings');
+        var data = await res.json();
+        applySiteBackground(data.bgUrl || '');
+      } catch (e) {}
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', render);
+
+    document.getElementById('pathInput').addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') {
+        var p = this.value.trim();
+        if (!p) return;
+        if (!p.startsWith('/')) p = '/' + p;
+        if (!p.endsWith('/')) p += '/';
+        currentPath = p;
+        render();
+      }
+    });
+
+    document.getElementById('mkdirBtn').addEventListener('click', async function() {
+      var name = prompt('输入新文件夹名称：');
+      if (!name) return;
+      name = encodeURIComponent(name.trim());
+      if (!name) return;
+      try {
+        var res = await fetch(WEBDAV_BASE + joinPath(currentPath, name) + '/', {
+          method: 'MKCOL', headers: authHeader()
+        });
+        if (res.status === 201) showToast('文件夹已创建', 'success');
+        else throw new Error('HTTP ' + res.status);
+      } catch (err) {
+        showToast('创建失败: ' + err.message, 'error');
+      }
+      render();
+    });
+
+    document.getElementById('uploadBtn').addEventListener('click', function() {
+      document.getElementById('uploadInput').click();
+    });
+    document.getElementById('uploadInput').addEventListener('change', async function(e) {
+      var files = Array.from(e.target.files || []);
+      this.value = '';
+      if (!files.length) return;
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        showToast('上传中: ' + f.name, 'info');
+        try {
+          var res = await fetch(WEBDAV_BASE + joinPath(currentPath, encodeURIComponent(f.name)), {
+            method: 'PUT',
+            headers: Object.assign(authHeader(), { 'Content-Type': f.type || 'application/octet-stream' }),
+            body: f
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+        } catch (err) {
+          showToast('上传失败: ' + f.name + ' (' + err.message + ')', 'error');
+        }
+      }
+      showToast('上传完成', 'success');
+      render();
+    });
+
+    /* ---- 初始化 ---- */
+    (function init() {
+      setupSettingsModal();
+      // 能进入本页说明服务端已校验会话（未登录会被 302 到主页）
+      showBrowser();
+      loadSiteBackground();
+    })();
+  </script>
+</body>
+</html>`;
+}
+
 // ==================== 主处理函数 ====================
 
 export default {
+  // 仅供本地预览/测试工具读取页面模板（生产环境不使用）
+  __WEBDAV_UI_HTML__: getWebDavUiHtml(),
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -2495,8 +3275,52 @@ export default {
         return handleApiV1(request, env, bucket, baseUrl, path);
       }
 
+      // 认证 API（登录/登出/设置读取）
+      if (path === '/api/auth/login' && request.method === 'POST') {
+        return handleAuthLogin(request, bucket);
+      }
+      if (path === '/api/auth/logout' && request.method === 'POST') {
+        return handleAuthLogout();
+      }
+      if (path === '/api/auth/status' && request.method === 'GET') {
+        const loggedIn = await isSessionValid(request, env);
+        const cfg = await getSiteConfig(bucket);
+        return jsonResponse({ loggedIn, authEnabled: true, authUser: cfg.authUser, bgUrl: cfg.bgUrl });
+      }
+
+      // 设置 API（读取无需登录，保存需要登录）
+      if (path === '/api/settings' && request.method === 'GET') {
+        return handleGetSettings(bucket);
+      }
+      if (path === '/api/settings' && request.method === 'POST') {
+        if (!(await isSessionValid(request, env))) {
+          return jsonResponse({ error: 'Unauthorized' }, 401);
+        }
+        return handleSaveSettings(request, bucket);
+      }
+
       if (path.startsWith('/api/')) {
         return handleApi(request, env, bucket, baseUrl, path);
+      }
+
+      // WebDAV 管理界面（独立页面）：未登录重定向主页，登录后才能进入
+      if (CONFIG.WEBDAV_ENABLED && path === (CONFIG.WEBDAV_PATH + '-ui')) {
+        if (!(await isSessionValid(request, env))) {
+          return new Response(null, { status: 302, headers: { 'Location': '/' } });
+        }
+        return new Response(getWebDavUiHtml(), {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
+
+      // WebDAV 接口（配置同步）：会话 Cookie 或 Basic Auth 任一通过即可
+      if (CONFIG.WEBDAV_ENABLED && (path === CONFIG.WEBDAV_PATH || path.startsWith(CONFIG.WEBDAV_PATH + '/'))) {
+        const sessionOk = await isSessionValid(request, env);
+        if (!sessionOk) {
+          const basicAuthError = await checkWebDavBasicAuth(request, bucket);
+          if (basicAuthError) return basicAuthError;
+        }
+        return handleWebDav(request, env, bucket, path);
       }
 
       if (path.startsWith('/d/')) {
@@ -2504,7 +3328,9 @@ export default {
         return handleDownload(request, env, bucket, fileId, baseUrl);
       }
 
-      return new Response(HTML_TEMPLATE, {
+      // 主页面：启用认证时未登录显示登录页（由前端渲染，避免闪烁）
+      const loggedIn = await isSessionValid(request, env);
+      return new Response(getIndexHtml(loggedIn), {
         headers: { 'Content-Type': 'text/html; charset=utf-8' }
       });
 
@@ -3251,6 +4077,690 @@ async function collectStorageState(bucket, baseUrl, options = {}) {
     remainingBytes: Math.max(0, limitBytes - usedBytes),
     files: files
   };
+}
+
+// ==================== 站点配置与会话认证 ====================
+
+// 站点配置在 R2 的存储 key
+const SITE_CONFIG_KEY = '_config/site';
+// 会话 Cookie 名称
+const SESSION_COOKIE = 'dsh_session';
+// 会话有效期：7 天
+const SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
+
+// 读取站点配置（合并 CONFIG 默认值），带内存缓存（Worker 生命周期内）
+let _siteConfigCache = null;
+let _siteConfigCacheAt = 0;
+async function getSiteConfig(bucket) {
+  // 缓存 30 秒，避免每次请求都读 R2
+  if (_siteConfigCache && Date.now() - _siteConfigCacheAt < 30000) {
+    return _siteConfigCache;
+  }
+  let stored = null;
+  try {
+    const obj = await bucket.get(SITE_CONFIG_KEY);
+    if (obj) stored = JSON.parse(await obj.text());
+  } catch (e) { /* 配置不存在或损坏则用默认 */ }
+  const config = {
+    // 认证：默认取 CONFIG.ACCESS_PASSWORD（兼容旧部署）
+    authUser: (stored && stored.authUser) || CONFIG.WEBDAV_USERNAME || 'admin',
+    authPassHash: (stored && stored.authPassHash) || null, // null = 未设置，回退 CONFIG.ACCESS_PASSWORD
+    authPassSalt: (stored && stored.authPassSalt) || null,
+    // WebDAV Basic Auth 密码哈希（与网页登录同一密码，单独存一份便于校验）
+    // 背景：'' = 默认渐变
+    bgUrl: (stored && stored.bgUrl) || '',
+    updatedAt: (stored && stored.updatedAt) || 0,
+  };
+  _siteConfigCache = config;
+  _siteConfigCacheAt = Date.now();
+  return config;
+}
+
+function invalidateSiteConfigCache() {
+  _siteConfigCache = null;
+  _siteConfigCacheAt = 0;
+}
+
+// 保存站点配置
+async function saveSiteConfig(bucket, patch) {
+  const current = await getSiteConfig(bucket);
+  const next = { ...current, ...patch, updatedAt: Date.now() };
+  await bucket.put(SITE_CONFIG_KEY, JSON.stringify(next), {
+    httpMetadata: { contentType: 'application/json' },
+  });
+  invalidateSiteConfigCache();
+  return next;
+}
+
+// 校验登录密码：优先站点配置里的哈希，否则回退 CONFIG.ACCESS_PASSWORD
+async function verifyAuthPassword(bucket, username, password) {
+  const cfg = await getSiteConfig(bucket);
+  const uOk = username === cfg.authUser;
+  if (!uOk) return false;
+  if (cfg.authPassHash && cfg.authPassSalt) {
+    const computed = await hashPassword(String(password || ''), cfg.authPassSalt);
+    return computed === cfg.authPassHash;
+  }
+  // 回退：与 CONFIG.ACCESS_PASSWORD 比对；若未设置全局密码，任何非空密码不通过
+  if (!CONFIG.ACCESS_PASSWORD) return false;
+  return String(password || '') === CONFIG.ACCESS_PASSWORD;
+}
+
+// 会话 token = base64(payload).hmac 签名
+async function signSession(payload, env) {
+  const secret = getSecretKey(env) + ':session';
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sigBuf = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  const sig = Array.from(new Uint8Array(sigBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return payload + '.' + sig;
+}
+
+async function verifySessionToken(token, env) {
+  if (!token) return false;
+  const idx = token.lastIndexOf('.');
+  if (idx < 0) return false;
+  const payload = token.slice(0, idx);
+  const expected = await signSession(payload, env);
+  return token === expected;
+}
+
+function parseCookies(request) {
+  const header = request.headers.get('Cookie') || '';
+  const out = {};
+  for (const part of header.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  }
+  return out;
+}
+
+// 会话 payload: expireTs 随机数（签名即可防篡改，过期时间放 payload 内）
+function makeSessionPayload() {
+  return 's' + Date.now() + '.' + crypto.randomUUID().slice(0, 8);
+}
+
+function sessionCookieHeader(token, maxAgeSeconds) {
+  const attrs = [
+    SESSION_COOKIE + '=' + token,
+    'Path=/',
+    'Max-Age=' + maxAgeSeconds,
+    'HttpOnly',
+    'SameSite=Lax',
+  ];
+  return attrs.join('; ');
+}
+
+// 检查请求是否已登录（会话 Cookie 有效）
+async function isSessionValid(request, env) {
+  const cookies = parseCookies(request);
+  const token = cookies[SESSION_COOKIE];
+  if (!token) return false;
+  if (!(await verifySessionToken(token, env))) return false;
+  const payload = token.split('.')[0];
+  const ts = parseInt(payload.slice(1).split('.')[0], 10);
+  if (isNaN(ts)) return false;
+  return Date.now() - ts < SESSION_TTL;
+}
+
+// ==================== 认证/设置 API ====================
+
+// POST /api/auth/login { username, password } -> 签发会话 Cookie
+async function handleAuthLogin(request, bucket) {
+  let body;
+  try { body = await request.json(); } catch (e) {
+    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  }
+  const { username, password } = body;
+  const ok = await verifyAuthPassword(bucket, String(username || '').trim(), String(password || ''));
+  if (!ok) {
+    return jsonResponse({ success: false, error: '账号或密码错误' }, 403);
+  }
+  const token = await signSession(makeSessionPayload(), {});
+  const headers = {
+    'Content-Type': 'application/json',
+    'Set-Cookie': sessionCookieHeader(token, Math.floor(SESSION_TTL / 1000)),
+    'Access-Control-Allow-Origin': '*',
+  };
+  return new Response(JSON.stringify({ success: true }), { headers });
+}
+
+// POST /api/auth/logout -> 清除会话
+function handleAuthLogout() {
+  return new Response(JSON.stringify({ success: true }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Set-Cookie': sessionCookieHeader('', 0),
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
+}
+
+// GET /api/settings -> 返回当前设置（密码不回传明文/哈希）
+async function handleGetSettings(bucket) {
+  const cfg = await getSiteConfig(bucket);
+  return jsonResponse({
+    authUser: cfg.authUser,
+    bgUrl: cfg.bgUrl,
+    hasCustomPassword: !!(cfg.authPassHash),
+  });
+}
+
+// POST /api/settings { authUser?, newPassword?, bgUrl? } -> 保存设置（需已登录）
+async function handleSaveSettings(request, bucket) {
+  let body;
+  try { body = await request.json(); } catch (e) {
+    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  }
+  const patch = {};
+  if (typeof body.authUser === 'string' && body.authUser.trim()) {
+    patch.authUser = body.authUser.trim();
+  }
+  if (typeof body.newPassword === 'string' && body.newPassword.length > 0) {
+    const salt = generateSalt();
+    patch.authPassHash = await hashPassword(body.newPassword, salt);
+    patch.authPassSalt = salt;
+  }
+  if (typeof body.bgUrl === 'string') {
+    patch.bgUrl = body.bgUrl.trim();
+  }
+  const saved = await saveSiteConfig(bucket, patch);
+  return jsonResponse({
+    success: true,
+    authUser: saved.authUser,
+    bgUrl: saved.bgUrl,
+  });
+}
+
+// ==================== WebDAV 处理（配置同步） ====================
+
+// WebDAV 路径转 R2 key（去除 /dav 前缀，做安全规范化，防止目录穿越）
+function webdavPathToKey(davPath) {
+  let p = davPath || '';
+  // 去掉开头的斜杠
+  p = p.replace(/^\/+/, '');
+  // 拆段、丢弃空段与 '.'/'..'，防止越界访问
+  const segments = p.split('/').filter((s) => s && s !== '.' && s !== '..');
+  const normalized = segments.join('/');
+  return CONFIG.WEBDAV_ROOT_KEY + normalized;
+}
+
+// 把 R2 key 转回 WebDAV 展示路径（不含 /dav 前缀）
+function webdavKeyToPath(key) {
+  const prefix = CONFIG.WEBDAV_ROOT_KEY;
+  let rel = key.startsWith(prefix) ? key.slice(prefix.length) : key;
+  rel = rel.replace(/\/+$/, '');
+  return '/' + rel;
+}
+
+// 判断一个 R2 key 是否是目录占位对象（以 / 结尾）
+function isDirectoryKey(key) {
+  return key.endsWith('/');
+}
+
+function webdavAuthError() {
+  return new Response('Unauthorized', {
+    status: 401,
+    headers: {
+      'WWW-Authenticate': 'Basic realm="WebDAV"',
+      'Content-Type': 'text/plain; charset=utf-8',
+    },
+  });
+}
+
+function getWebDavPassword(env) {
+  return CONFIG.WEBDAV_PASSWORD || env.WEBDAV_PASSWORD || '';
+}
+
+// Basic Auth 校验（WebDAV 客户端用）：账号/密码优先用站点配置，回退 CONFIG
+// 返回 null = 通过；返回 Response = 401
+async function checkWebDavBasicAuth(request, bucket) {
+  const cfg = await getSiteConfig(bucket);
+  const username = cfg.authUser || CONFIG.WEBDAV_USERNAME || '';
+  const webdavPass = getWebDavPassword({});
+
+  const authHeader = request.headers.get('Authorization') || '';
+  const m = authHeader.match(/^Basic\s+(.+)$/i);
+  if (!m) return webdavAuthError();
+
+  let decoded = '';
+  try {
+    decoded = atob(m[1]);
+  } catch (e) {
+    return webdavAuthError();
+  }
+
+  const idx = decoded.indexOf(':');
+  if (idx < 0) return webdavAuthError();
+  const u = decoded.slice(0, idx);
+  const p = decoded.slice(idx + 1);
+
+  // 1) 与站点配置的账号密码哈希比对（设置里改的密码）
+  if (u === username && cfg.authPassHash && cfg.authPassSalt) {
+    const computed = await hashPassword(p, cfg.authPassSalt);
+    if (computed === cfg.authPassHash) return null;
+  }
+  // 2) 回退：与 WEBDAV_PASSWORD 环境变量/CONFIG 比对
+  if (webdavPass && u === username && p === webdavPass) return null;
+  // 3) 回退：与全局 ACCESS_PASSWORD 比对（老部署兼容）
+  if (CONFIG.ACCESS_PASSWORD && u === username && p === CONFIG.ACCESS_PASSWORD) return null;
+
+  return webdavAuthError();
+}
+
+function webdavXmlEscape(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function httpDate(d) {
+  const t = d instanceof Date ? d : new Date(d);
+  return t.toUTCString();
+}
+
+async function handleWebDav(request, env, bucket, path) {
+  // 认证已在路由层完成（会话 Cookie 或 Basic Auth 二选一）
+
+  // 去掉 /dav 前缀，得到 WebDAV 路径（保留尾部斜杠以区分目录）
+  const davPath = path.slice(CONFIG.WEBDAV_PATH.length);
+  const key = webdavPathToKey(davPath);
+  const method = request.method.toUpperCase();
+
+  switch (method) {
+    case 'OPTIONS':
+      return handleWebDavOptions();
+    case 'PROPFIND':
+      return handleWebDavPropfind(bucket, key, davPath, request);
+    case 'GET':
+      return handleWebDavGet(bucket, key);
+    case 'HEAD':
+      return handleWebDavHead(bucket, key);
+    case 'PUT':
+      return handleWebDavPut(request, bucket, key, davPath);
+    case 'DELETE':
+      return handleWebDavDelete(bucket, key);
+    case 'MKCOL':
+      return handleWebDavMkcol(bucket, key);
+    case 'MOVE':
+      return handleWebDavMove(request, bucket, key);
+    case 'COPY':
+      return handleWebDavCopy(request, bucket, key);
+    case 'LOCK':
+      return handleWebDavLock(request, env, key, davPath);
+    case 'UNLOCK':
+      return handleWebDavUnlock(request, env, key, davPath);
+    default:
+      return new Response('Method Not Allowed', {
+        status: 405,
+        headers: { 'Allow': 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK' },
+      });
+  }
+}
+
+function handleWebDavOptions() {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      'DAV': '1,2',
+      'Allow': 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK',
+      'MS-Author-Via': 'DAV',
+    },
+  });
+}
+
+// 列出目录下的子项（带父级），返回 207 multi-status XML
+async function handleWebDavPropfind(bucket, key, davPath, request) {
+  // Depth: 0 只返回自身，1 返回直接子项（默认 1）
+  const depth = request.headers.get('Depth') || '1';
+
+  const responses = [];
+
+  async function addResponse(itemKey, size, lastModified, isCollection) {
+    const itemPath = webdavKeyToPath(itemKey);
+    // 目录 href 统一带尾斜杠（WebDAV 惯例，客户端依赖它区分目录）
+    const normalizedPath = isCollection && !itemPath.endsWith('/') ? itemPath + '/' : itemPath;
+    const href = CONFIG.WEBDAV_PATH + (normalizedPath === '/' ? '/' : normalizedPath);
+    responses.push(
+      '<D:response>' +
+        '<D:href>' + webdavXmlEscape(href) + '</D:href>' +
+        '<D:propstat>' +
+          '<D:prop>' +
+            '<D:resourcetype>' + (isCollection ? '<D:collection/>' : '') + '</D:resourcetype>' +
+            '<D:getcontentlength>' + (isCollection ? 0 : size) + '</D:getcontentlength>' +
+            '<D:getlastmodified>' + httpDate(lastModified || new Date()) + '</D:getlastmodified>' +
+            '<D:creationdate>' + httpDate(lastModified || new Date()) + '</D:creationdate>' +
+            '<D:displayname>' + webdavXmlEscape(itemKey.split('/').filter(Boolean).pop() || '') + '</D:displayname>' +
+          '</D:prop>' +
+          '<D:status>HTTP/1.1 200 OK</D:status>' +
+        '</D:propstat>' +
+      '</D:response>'
+    );
+  }
+
+  // 目标对象自身
+  const targetObj = await bucket.head(key);
+  if (targetObj) {
+    const isCol = isDirectoryKey(key);
+    await addResponse(key, targetObj.size || 0, targetObj.uploaded || new Date(), isCol);
+  } else {
+    // 目标不存在时，检查是否有以它为前缀的子对象（即它是一个"目录"）
+    const prefix = key.endsWith('/') ? key : key + '/';
+    const listed = await bucket.list({ prefix, limit: 1 });
+    const isRoot = key === CONFIG.WEBDAV_ROOT_KEY;
+    if (listed.objects.length > 0 || isRoot) {
+      // 根目录在尚未写入任何占位对象时也按空目录返回，避免首次访问 404
+      await addResponse(key.endsWith('/') ? key : key + '/', 0, new Date(), true);
+    } else {
+      return new Response('Not Found', { status: 404 });
+    }
+  }
+
+  // Depth >= 1 时列出直接子项
+  if (depth !== '0') {
+    const listPrefix = key.endsWith('/') ? key : key + '/';
+    let cursor;
+    do {
+      const listed = await bucket.list({ prefix: listPrefix, cursor, limit: 1000 });
+      for (const obj of listed.objects) {
+        const objKey = obj.key;
+        if (objKey === listPrefix) continue;
+        // 只取直接子项：去掉前缀与目录占位符的尾部斜杠后不应再包含 '/'
+        const rel = objKey.slice(listPrefix.length).replace(/\/+$/, '');
+        if (rel === '' || rel.includes('/')) continue;
+        const isCol = isDirectoryKey(objKey);
+        await addResponse(objKey, obj.size || 0, obj.uploaded || new Date(), isCol);
+      }
+      cursor = listed.truncated ? listed.cursor : undefined;
+    } while (cursor);
+  }
+
+  const xml = '<?xml version="1.0" encoding="utf-8"?>\n' +
+    '<D:multistatus xmlns:D="DAV:">' + responses.join('') + '</D:multistatus>';
+  return new Response(xml, {
+    status: 207,
+    headers: { 'Content-Type': 'application/xml; charset=utf-8' },
+  });
+}
+
+async function handleWebDavGet(bucket, key) {
+  const obj = await bucket.get(key);
+  if (!obj) return new Response('Not Found', { status: 404 });
+
+  const headers = {
+    'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
+    'Content-Length': String(obj.size),
+    'ETag': obj.etag,
+  };
+  return new Response(obj.body, { headers });
+}
+
+async function handleWebDavHead(bucket, key) {
+  const obj = await bucket.head(key);
+  if (!obj) return new Response('Not Found', { status: 404 });
+  const headers = {
+    'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
+    'Content-Length': String(obj.size),
+    'ETag': obj.etag,
+  };
+  return new Response(null, { headers });
+}
+
+async function handleWebDavPut(request, bucket, key, davPath) {
+  const body = request.body;
+  if (!body) return new Response('Bad Request', { status: 400 });
+
+  const contentLength = parseInt(request.headers.get('Content-Length') || '0', 10);
+  if (contentLength > CONFIG.WEBDAV_MAX_FILE_SIZE) {
+    return new Response('Payload Too Large', { status: 413 });
+  }
+
+  const contentType = request.headers.get('Content-Type') || 'application/octet-stream';
+  const now = new Date();
+
+  await bucket.put(key, body, {
+    httpMetadata: { contentType },
+    customMetadata: {
+      webdav: '1',
+      lastModified: now.toISOString(),
+    },
+  });
+
+  // 同步确保父目录占位对象存在（R2 无真目录，靠 / 结尾的占位对象模拟）
+  await ensureParentDirectories(bucket, key);
+
+  return new Response(null, { status: 201, headers: { 'ETag': '"' + Date.now().toString(36) + '"' } });
+}
+
+async function handleWebDavDelete(bucket, key) {
+  // 如果是目录（尾部斜杠或按前缀存在子对象），递归删除
+  const asDirKey = key.endsWith('/') ? key : key + '/';
+  let deletedAny = false;
+
+  const headTarget = await bucket.head(key);
+  if (headTarget) {
+    await bucket.delete(key);
+    deletedAny = true;
+  }
+
+  let cursor;
+  do {
+    const listed = await bucket.list({ prefix: asDirKey, cursor, limit: 1000 });
+    for (const obj of listed.objects) {
+      await bucket.delete(obj.key);
+      deletedAny = true;
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+
+  if (!deletedAny) return new Response('Not Found', { status: 404 });
+  return new Response(null, { status: 204 });
+}
+
+async function handleWebDavMkcol(bucket, key) {
+  // 规范化成目录 key（末尾带 /）
+  const dirKey = key.endsWith('/') ? key : key + '/';
+
+  // 已存在同名对象则报冲突
+  const existing = await bucket.head(dirKey);
+  if (existing) return new Response('Conflict', { status: 405 });
+
+  await bucket.put(dirKey, new Uint8Array(0), {
+    httpMetadata: { contentType: 'httpd/unix-directory' },
+    customMetadata: { webdav: '1', isDir: '1' },
+  });
+
+  await ensureParentDirectories(bucket, dirKey);
+  return new Response(null, { status: 201 });
+}
+
+async function handleWebDavMove(request, bucket, key) {
+  const destinationHeader = request.headers.get('Destination');
+  if (!destinationHeader) return new Response('Destination required', { status: 400 });
+
+  const destPath = extractWebDavPathFromDestination(destinationHeader);
+  if (!destPath) return new Response('Bad Destination', { status: 400 });
+
+  const destKey = webdavPathToKey(destPath);
+  if (destKey === key) return new Response(null, { status: 204 });
+
+  const overwrite = request.headers.get('Overwrite');
+  const allowOverwrite = !overwrite || overwrite.toUpperCase() !== 'F';
+
+  // 目录移动：递归复制+删除
+  const isDir = key.endsWith('/');
+  const keysToMove = [];
+
+  if (isDir) {
+    let cursor;
+    const prefix = key;
+    do {
+      const listed = await bucket.list({ prefix, cursor, limit: 1000 });
+      for (const obj of listed.objects) keysToMove.push(obj.key);
+      cursor = listed.truncated ? listed.cursor : undefined;
+    } while (cursor);
+    if (keysToMove.length === 0) {
+      const headDir = await bucket.head(key);
+      if (headDir) keysToMove.push(key);
+    }
+  } else {
+    keysToMove.push(key);
+  }
+
+  if (keysToMove.length === 0) return new Response('Not Found', { status: 404 });
+
+  // 目标存在且不允许覆盖
+  if (!allowOverwrite) {
+    const destHead = await bucket.head(destKey) || await bucket.head(destKey + '/');
+    if (destHead) return new Response('Precondition Failed', { status: 412 });
+  }
+
+  for (const srcKey of keysToMove) {
+    const rel = srcKey.slice(key.length);
+    const newKey = destKey.endsWith('/') ? destKey + rel : destKey + rel;
+    const obj = await bucket.get(srcKey);
+    if (!obj) continue;
+    await bucket.put(newKey, obj.body, {
+      httpMetadata: obj.httpMetadata,
+      customMetadata: obj.customMetadata,
+    });
+    await bucket.delete(srcKey);
+  }
+
+  await ensureParentDirectories(bucket, destKey);
+  return new Response(null, { status: 201 });
+}
+
+async function handleWebDavCopy(request, bucket, key) {
+  const destinationHeader = request.headers.get('Destination');
+  if (!destinationHeader) return new Response('Destination required', { status: 400 });
+
+  const destPath = extractWebDavPathFromDestination(destinationHeader);
+  if (!destPath) return new Response('Bad Destination', { status: 400 });
+
+  const destKey = webdavPathToKey(destPath);
+  if (destKey === key) return new Response(null, { status: 204 });
+
+  const overwrite = request.headers.get('Overwrite');
+  const allowOverwrite = !overwrite || overwrite.toUpperCase() !== 'F';
+
+  if (!allowOverwrite) {
+    const destHead = await bucket.head(destKey);
+    if (destHead) return new Response('Precondition Failed', { status: 412 });
+  }
+
+  const obj = await bucket.get(key);
+  if (!obj) return new Response('Not Found', { status: 404 });
+
+  await bucket.put(destKey, obj.body, {
+    httpMetadata: obj.httpMetadata,
+    customMetadata: obj.customMetadata,
+  });
+  await ensureParentDirectories(bucket, destKey);
+  return new Response(null, { status: 201 });
+}
+
+// LOCK 用 KV 存锁 token（如果未绑定 KV 则降级为内存级空实现，返回不支持）
+async function handleWebDavLock(request, env, key, davPath) {
+  const lockNs = env.WEBDAV_LOCKS;
+  if (!lockNs) {
+    // 未绑定 KV 时，返回 405 不支持锁定；多数配置同步客户端可容忍
+    return new Response('Lock not supported', { status: 405 });
+  }
+
+  const token = 'opaquelocktoken:' + crypto.randomUUID();
+  const timeout = parseTimeout(request.headers.get('Timeout'));
+  const now = Date.now();
+  const expire = now + (timeout > 0 ? timeout : 5 * 60 * 1000);
+
+  await lockNs.put('lock:' + key, JSON.stringify({
+    token,
+    expire,
+    owner: 'webdav-sync',
+  }));
+
+  const lockXml = '<?xml version="1.0" encoding="utf-8"?>\n' +
+    '<D:prop xmlns:D="DAV:">' +
+      '<D:lockdiscovery>' +
+        '<D:activelock>' +
+          '<D:locktype><D:write/></D:locktype>' +
+          '<D:lockscope><D:exclusive/></D:lockscope>' +
+          '<D:depth>infinity</D:depth>' +
+          '<D:owner><D:href>webdav-sync</D:href></D:owner>' +
+          '<D:timeout>Second-' + Math.floor((expire - now) / 1000) + '</D:timeout>' +
+          '<D:locktoken><D:href>' + webdavXmlEscape(token) + '</D:href></D:locktoken>' +
+        '</D:activelock>' +
+      '</D:lockdiscovery>' +
+    '</D:prop>';
+  return new Response(lockXml, {
+    status: 200,
+    headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Lock-Token': '<' + token + '>' },
+  });
+}
+
+async function handleWebDavUnlock(request, env, key, davPath) {
+  const lockNs = env.WEBDAV_LOCKS;
+  if (!lockNs) return new Response('Lock not supported', { status: 405 });
+
+  const lockTokenHeader = request.headers.get('Lock-Token') || '';
+  const m = lockTokenHeader.match(/<([^>]+)>/);
+  const token = m ? m[1] : '';
+
+  const existing = await lockNs.get('lock:' + key);
+  if (existing) {
+    const lockData = JSON.parse(await existing.text());
+    if (!token || lockData.token === token || token.replace('opaquelocktoken:', '') === lockData.token.replace('opaquelocktoken:', '')) {
+      await lockNs.delete('lock:' + key);
+      return new Response(null, { status: 204 });
+    }
+  }
+  return new Response('Lock not found', { status: 409 });
+}
+
+// 解析 Timeout 头，返回毫秒；无法解析返回 -1
+function parseTimeout(header) {
+  if (!header) return -1;
+  const m = String(header).match(/Second-(\d+)/i);
+  return m ? parseInt(m[1], 10) * 1000 : -1;
+}
+
+// 从 Destination 头提取 WebDAV 路径（去掉 scheme/host 和 /dav 前缀）
+function extractWebDavPathFromDestination(destinationHeader) {
+  let dest = destinationHeader.trim();
+  // 去掉 < > 包裹
+  if (dest.startsWith('<') && dest.endsWith('>')) dest = dest.slice(1, -1);
+  try {
+    const u = new URL(dest);
+    dest = u.pathname;
+  } catch (e) {
+    // 可能只是路径
+  }
+  if (dest.startsWith(CONFIG.WEBDAV_PATH)) {
+    dest = dest.slice(CONFIG.WEBDAV_PATH.length);
+  }
+  return dest;
+}
+
+// 确保父目录占位对象存在（R2 无真目录）
+async function ensureParentDirectories(bucket, key) {
+  const segments = key.split('/').filter((s) => s && s !== '.' && s !== '..');
+  // 最后一个段是文件名/目录本身，父目录是其之前的段
+  const parents = segments.slice(0, -1);
+  let acc = '';
+  for (const seg of parents) {
+    acc += seg + '/';
+    const dirKey = acc;
+    const existing = await bucket.head(dirKey);
+    if (!existing) {
+      await bucket.put(dirKey, new Uint8Array(0), {
+        httpMetadata: { contentType: 'httpd/unix-directory' },
+        customMetadata: { webdav: '1', isDir: '1' },
+      });
+    }
+  }
 }
 
 async function handleDownload(request, env, bucket, fileId, baseUrl) {

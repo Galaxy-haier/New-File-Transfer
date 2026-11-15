@@ -1,6 +1,6 @@
-# 文件中转站 | File Transfer
+# 文件中转站 | New File Transfer
 
-这是一个基于 Cloudflare Workers + R2 的文件中转站项目，当前仓库为公开 fork/二改版本。
+基于 Cloudflare Workers + R2 的文件中转站与 WebDAV 配置同步服务。单文件部署（`worker.js`），包含网页上传界面、WebDAV 协议接口、WebDAV 管理界面与全局认证体系。
 
 [![community](https://github.com/user-attachments/assets/653f2b6b-ee32-4f0f-abe0-1ba96e4bb473)](https://linux.do/)
 
@@ -10,74 +10,65 @@
 - 本仓库基于上游项目进行二次修改与公开分发
 - 当前仓库继续沿用 `Apache License 2.0`
 
-如果你准备把本项目公开到 GitHub，建议在仓库描述或 README 中继续明确写明：
+## 功能总览
 
-- `Forked from: <原项目仓库地址>`
-- `This repository contains custom modifications`
+- 大文件上传（分片上传，多文件并发）
+- 文件分享密码 / 全局登录认证
+- 文件过期自动清理、临时下载直链、二维码分享
+- **全局登录**：一次登录（7 天会话），中转站与 WebDAV 管理页通用
+- **右上角设置**：修改登录账号/密码、自定义网站背景图（持久化到 R2）
+- **WebDAV 协议接口**（`/dav/`）：配置同步到 R2，支持 RaiDrive、curl 等客户端
+- **WebDAV 管理界面**（`/dav-ui`）：目录化浏览/管理所有同步文件，与主界面分离
+- **API v1 程序化接口**（`/api/v1/*`，API Key 认证）
 
-## 本 Fork 增加/调整了什么
+## 界面功能
 
-- 上传记录支持从 R2 元数据恢复，Worker 重新部署后仍可重新读取历史记录
-- 上传记录新增删除按钮，可直接从 R2 中移除文件
-- 删除操作改为确认弹窗，避免误删
-- 上传记录显示文件剩余有效时间，而不是只显示文件大小
-- 分享二维码改为弹窗展示，点击二维码可复制分享链接
-- 上传记录恢复完整分享链接显示，并优化为单行截断布局
-- 顶部状态卡改为显示剩余存储空间
-- 新增存储空间统计逻辑，按 10GB 总容量计算已用/剩余空间
-- 当存储空间已满，或待上传文件大于剩余空间时，前后端都会阻止上传
-- **新增 API v1 程序化接口**（`/api/v1/*`），支持 API Key 认证的上传/下载/URL抓取/文件管理
+**文件中转站主页**（登录后）：
 
-## 效果图
+- 拖拽/点击上传，多文件并发，实时进度
+- 每条上传记录：⬇ 下载（新标签页，有密码的文件先进入密码页）、🔗 分享（二维码弹窗，点击二维码复制链接）、🗑 删除（确认弹窗）
+- 上传记录从 R2 元数据恢复，重新部署不丢失；显示剩余有效时间
+- 顶部状态卡：剩余存储空间（按 `STORAGE_LIMIT` 计算）、文件过期时间、下载链接有效期
 
-![项目效果图](./assets/preview.svg)
+**WebDAV 同步管理页**（`/dav-ui`，登录后）：
 
-## 现有功能
+- 目录化浏览 `dav/` 前缀下所有同步文件（面包屑导航 + 路径跳转）
+- 新建文件夹、上传文件（多选）、文件下载、复制直链、删除（目录递归删除）
+- 未登录直接访问会重定向回主页登录
+- 顶部「📁 文件中转站」按钮返回主页
 
-- 大文件上传
-- 分片上传
-- 文件分享密码
-- 全局访问密码
-- 文件过期自动清理
-- 临时下载直链
-- 二维码分享
-- 多文件并发上传
-- **API v1 程序化接口**（API Key 认证，支持上传/下载/URL抓取）
+**右上角全局按钮**（两页一致）：⚙ 设置（左）、退出登录（右）。
 
-## 项目结构
+## 全局认证与设置
 
-- `worker.js`：主程序，前端页面与 Worker API 都在这个文件中
-- `schema.sql`：原项目附带的 SQL 文件
-- `LICENSE.txt`：Apache License 2.0 文本
+### 登录
+
+- 访问站点任意页面（中转站 / WebDAV 管理页）都需要登录，一次登录签发 7 天有效的会话 Cookie，两个功能通用。
+- 初始凭据：账号为 `CONFIG.WEBDAV_USERNAME`（默认 `admin`），密码为 `CONFIG.ACCESS_PASSWORD`；若 R2 中已有站点配置（`_config/site`），以配置中的账号/密码为准。
+- 未登录直接访问 `/dav-ui` 会重定向回主页。
+
+### 设置弹窗（右上角 ⚙）
+
+- **账号**：修改登录用户名（WebDAV 客户端的 Basic Auth 用户名同步变化）
+- **新密码**：修改登录密码（留空不修改；网页登录与 WebDAV Basic Auth 同步生效）
+- **网站背景**：填入图片地址，支持 `https://` 外链或本站 WebDAV 路径（如 `/dav/wallpaper.jpg`）；留空恢复默认渐变
+
+配置保存在 R2 `_config/site`，密码加盐哈希存储，不存明文。
 
 ## 部署方式
 
-这个项目目前是单文件 Worker 方案。正常情况下，部署时只需要部署 `worker.js`，并绑定好 R2。
+单文件 Worker 方案，部署 `worker.js` 并绑定 R2 即可。
 
-### 1. 创建 Worker
-
-可以用 Cloudflare Dashboard，也可以用 `wrangler`。
+### 1. 创建 Worker 与 R2
 
 ```bash
 wrangler login
 wrangler init file-transfer
 ```
 
-### 2. 创建 R2 Bucket
+在 Cloudflare Dashboard 创建 R2 Bucket。默认桶名 `file-transfer`，如不同请修改 `worker.js` 里的 `CONFIG.BUCKET_NAME`。
 
-在 Cloudflare Dashboard 中创建一个 R2 Bucket。
-
-默认配置下，代码里使用的桶名是：
-
-```js
-BUCKET_NAME: 'file-transfer'
-```
-
-如果你使用别的桶名，请同步修改 `worker.js` 里的 `CONFIG.BUCKET_NAME`。
-
-### 3. 绑定 R2 Bucket
-
-如果你使用 `wrangler.toml`，可参考：
+### 2. 绑定 R2
 
 ```toml
 [[r2_buckets]]
@@ -85,127 +76,101 @@ binding = "file-transfer"
 bucket_name = "file-transfer"
 ```
 
-### 4. 部署 Worker
+### 3. 可选：绑定 KV（支持 WebDAV LOCK）
+
+部分 WebDAV 客户端写入时需要 `LOCK`，可绑定一个 KV namespace：
+
+```toml
+[[kv_namespaces]]
+binding = "WEBDAV_LOCKS"
+id = "你的 KV namespace id"
+```
+
+不绑定不影响基础配置同步，仅 `LOCK`/`UNLOCK` 返回 405。
+
+### 4. 可选：Secret 环境变量
+
+```bash
+wrangler secret put WEBDAV_PASSWORD   # WebDAV Basic Auth 回退密码
+wrangler secret put SHARE_SECRET_KEY  # 临时下载签名密钥
+```
+
+### 5. 部署
 
 ```bash
 wrangler deploy
 ```
 
-如果你使用 Cloudflare Dashboard，直接将 `worker.js` 内容更新后重新发布即可。
-
 ## 配置项
 
-请直接编辑 `worker.js` 顶部的 `CONFIG`：
+编辑 `worker.js` 顶部的 `CONFIG`：
 
 ```js
 const CONFIG = {
   BUCKET_NAME: 'file-transfer',
-  ACCESS_PASSWORD: '',
-  SHARE_SECRET_KEY: '',
+  ACCESS_PASSWORD: '',            // 初始登录密码（建议部署后立即在设置里改密码）
+  SHARE_SECRET_KEY: '',           // 临时下载签名密钥，建议自定义
   TEMP_LINK_EXPIRE: 5 * 60 * 1000,
   MAX_FILE_SIZE: 100 * 1024 * 1024 * 1024,
   STORAGE_LIMIT: 10 * 1024 * 1024 * 1024,
-  FILE_EXPIRE_TIME: 7 * 24 * 60 * 60 * 1000,
+  FILE_EXPIRE_TIME: 7 * 24 * 60 * 60 * 1000,  // 0 = 永不过期
   ALLOWED_TYPES: [],
   CUSTOM_DOMAIN: '',
   MAX_CONCURRENT_UPLOADS: 3,
   CHUNK_SIZE: 50 * 1024 * 1024,
   MULTIPART_THRESHOLD: 100 * 1024 * 1024,
-  API_KEY: '',
+  API_KEY: '',                    // /api/v1/* 密钥，留空则 v1 接口返回 503
+  WEBDAV_ENABLED: true,           // WebDAV 接口与管理页开关
+  WEBDAV_PATH: '/dav',            // WebDAV 挂载点
+  WEBDAV_ROOT_KEY: 'dav/',        // WebDAV 文件在 R2 的存储前缀
+  WEBDAV_USERNAME: 'admin',       // 初始登录/WebDAV 账号
+  WEBDAV_PASSWORD: '',            // Basic Auth 回退密码（推荐走 Secret）
+  WEBDAV_MAX_FILE_SIZE: 10 * 1024 * 1024,  // WebDAV 单文件上限
 };
 ```
 
-### 配置说明
+## WebDAV 配置同步
 
-- `ACCESS_PASSWORD`：站点全局访问密码，留空则不启用
-- `SHARE_SECRET_KEY`：临时下载签名密钥，建议生产环境务必自定义
-- `TEMP_LINK_EXPIRE`：临时下载直链有效期，默认 5 分钟
-- `MAX_FILE_SIZE`：单文件上传上限
-- `STORAGE_LIMIT`：用于计算剩余空间的总容量，当前默认按 R2 Free 的 10GB 设置
-- `FILE_EXPIRE_TIME`：文件分享有效期，默认 7 天，设为 `0` 表示永不过期
-- `CUSTOM_DOMAIN`：自定义域名，可选
-- `MAX_CONCURRENT_UPLOADS`：前端并发上传文件数
-- `CHUNK_SIZE`：分片大小
-- `MULTIPART_THRESHOLD`：超过该大小自动走分片上传
-- `API_KEY`：程序化接口密钥，用于 `/api/v1/*` 端点认证，留空则 v1 接口返回 503
+把支持 WebDAV 的软件（密码管理器、笔记、RSS、同步工具等）指向本服务的 `/dav/` 地址，配置直接存储到 Cloudflare R2，无需任何第三方服务。
 
-## 当前行为说明
+### 连接信息
 
-### 分享链接与临时下载链接
+| 项 | 值 |
+|---|---|
+| WebDAV URL | `https://your-domain/dav/` |
+| 管理界面 | `https://your-domain/dav-ui` |
+| 用户名 / 密码 | 与网页登录一致（设置里修改后同步生效） |
 
-页面中看到的分享链接通常是固定入口，例如：
+### 支持的协议方法
 
-```text
-/d/{fileId}
-```
+`OPTIONS` / `PROPFIND` / `GET` / `HEAD` / `PUT` / `DELETE` / `MKCOL` / `MOVE` / `COPY` / `LOCK` / `UNLOCK`
 
-这个入口链接本身不会因为 5 分钟到了就变化。
+- 浏览器访问凭会话 Cookie 放行；WebDAV 客户端用 Basic Auth（账号密码与网页登录一致）。
+- 目录用「以 `/` 结尾的空对象」模拟，文件统一存放在 `WEBDAV_ROOT_KEY`（默认 `dav/`）前缀下，与网页上传的 `uploads/` 完全隔离。
+- WebDAV 单文件上限 `WEBDAV_MAX_FILE_SIZE`（默认 10MB）；Workers 免费版单请求体上限约 100MB。
 
-真正只有 5 分钟有效的是点击下载后生成的临时下载直链，形式类似：
+### 使用示例（curl）
 
-```text
-/d/{fileId}?token=...&expires=...
-```
+```bash
+# 列目录
+curl -u admin:你的密码 -X PROPFIND "https://your-domain/dav/" -H "Depth: 1"
 
-会变化的是 `token` 和 `expires`，不是 `fileId`。
+# 上传配置文件
+curl -u admin:你的密码 -T ./settings.json "https://your-domain/dav/app/settings.json"
 
-### 剩余存储空间是如何计算的
+# 下载
+curl -u admin:你的密码 "https://your-domain/dav/app/settings.json"
 
-Cloudflare Worker 侧当前没有直接返回“桶剩余空间”的现成接口可用，因此本项目采用以下方式计算：
+# 创建目录
+curl -u admin:你的密码 -X MKCOL "https://your-domain/dav/app/"
 
-1. 遍历 R2 中 `_meta/` 下的文件元数据
-2. 汇总已上传文件的 `size`
-3. 用 `STORAGE_LIMIT - 已用大小` 得到剩余空间
-
-这也是顶部“剩余存储空间”卡片的来源。
-
-### 为什么重新部署后还能显示上传记录
-
-上传记录不是保存在页面内存里，而是会在页面初始化时重新读取 R2 的 `_meta/` 元数据，因此重新部署 Worker 后，只要元数据还在，上传记录就能恢复显示。
-
-## 相关接口
-
-### 获取上传凭证
-
-```http
-POST /api/upload-url
-Content-Type: application/json
-
-{
-  "filename": "example.zip",
-  "size": 104857600,
-  "type": "application/zip",
-  "password": "optional-share-password"
-}
-```
-
-### 上传记录列表
-
-```http
-GET /api/files
-```
-
-### 当前存储空间
-
-```http
-GET /api/storage
-```
-
-### 删除文件
-
-```http
-POST /api/file/delete
-Content-Type: application/json
-
-{
-  "fileId": "..."
-}
+# 删除
+curl -u admin:你的密码 -X DELETE "https://your-domain/dav/app/settings.json"
 ```
 
 ## API v1 程序化接口（需 API Key）
 
-所有 `/api/v1/*` 接口需要在请求头中携带 `X-API-Key`，值与 `CONFIG.API_KEY` 一致。
-如果 `CONFIG.API_KEY` 为空，所有 v1 接口将返回 503。
+所有 `/api/v1/*` 接口在请求头携带 `X-API-Key`（值 = `CONFIG.API_KEY`）；留空则返回 503。
 
 ### 直接上传文件
 
@@ -220,13 +185,8 @@ X-Share-Password: optional-password
 <raw file binary content>
 ```
 
-- `X-Filename`：**必填**，文件名
-- `Content-Type`：可选，默认 `application/octet-stream`
-- `X-Expire-Ms`：可选，过期时间（毫秒），默认使用 `CONFIG.FILE_EXPIRE_TIME`
-- `X-Share-Password`：可选，分享密码
-- Body 为文件的原始二进制内容
+响应：
 
-响应示例：
 ```json
 {
   "success": true,
@@ -253,83 +213,48 @@ Content-Type: application/json
 }
 ```
 
-- `url`：**必填**，要下载的文件 URL
-- `filename`：可选，自定义文件名（不填则从 URL 提取）
-- `expireMs`：可选，过期时间（毫秒）
-- `sharePassword`：可选，分享密码
+### 其他端点
 
-Worker 会从该 URL 下载文件内容并存储到 R2，支持大文件流式传输。
+- `GET /api/v1/download/:fileId` — 直接返回文件二进制流
+- `GET /api/v1/files` — 列出所有文件
+- `GET /api/v1/storage` — 查看存储空间
+- `POST /api/v1/delete` — 删除文件（`{"fileId": "abc123"}`）
 
-响应示例：
-```json
-{
-  "success": true,
-  "fileId": "def456",
-  "filename": "custom-name.apk",
-  "size": 52428800,
-  "downloadUrl": "https://your-domain/d/def456",
-  "sourceUrl": "https://example.com/file.apk",
-  "expireTime": 1719500000000
-}
-```
+## 项目结构
 
-### 直接下载文件
+- `worker.js`：主程序（前端页面 + 全部 API + WebDAV 协议实现）
+- `schema.sql`：原项目附带的 D1 SQL（当前代码未使用）
+- `preview/`：本地预览工具（Node 内存模拟 R2/KV，`node preview/server.mjs` 后访问 http://127.0.0.1:8787，预置账号 admin/admin；非生产代码）
+- `LICENSE.txt`：Apache License 2.0
 
-```http
-GET /api/v1/download/:fileId
-X-API-Key: your-api-key
-```
+## 当前行为说明
 
-直接返回文件的二进制内容流，`Content-Type` 和 `Content-Disposition` 与原始上传一致。
-可用于程序化下载，无需经过页面验证。
+### 分享链接与临时下载链接
 
-### 列出所有文件
+页面中的分享链接是固定入口 `/d/{fileId}`；真正 5 分钟有效的是点击下载后生成的临时直链 `/d/{fileId}?token=...&expires=...`，变化的是 `token` 和 `expires`，不是 `fileId`。
 
-```http
-GET /api/v1/files
-X-API-Key: your-api-key
-```
+### 剩余存储空间的计算
 
-### 查看存储空间
+Worker 侧没有桶剩余空间的现成接口，采用：遍历 R2 `_meta/` 元数据 → 汇总文件大小 → `STORAGE_LIMIT - 已用大小`。这也是顶部「剩余存储空间」卡片的来源。
 
-```http
-GET /api/v1/storage
-X-API-Key: your-api-key
-```
+### 为什么重新部署后还能显示上传记录
 
-### 删除文件
-
-```http
-POST /api/v1/delete
-X-API-Key: your-api-key
-Content-Type: application/json
-
-{
-  "fileId": "abc123"
-}
-```
+上传记录在页面初始化时从 R2 `_meta/` 元数据读取，只要元数据在，记录就能恢复。
 
 ## 使用与公开注意事项
 
 ### Apache 2.0 下你需要保留的内容
 
-- 保留 `LICENSE.txt`
-- 保留上游项目原有版权与归属声明
-- 对你修改过的文件，建议在提交记录、README 或发布说明中明确说明“此仓库包含修改”
-- 如果上游项目后来包含 `NOTICE` 文件，你在继续分发时也应一并保留其要求的归属说明
-
-### 公开 fork 时建议这样做
-
-- 在 README 中明确写明 fork 来源
-- 不要让仓库名称、描述或 README 让人误以为这是原作者官方仓库
-- 如果你继续大幅修改，建议增加一个“与上游差异”章节
+- 保留 `LICENSE.txt` 与上游项目原有版权与归属声明
+- 对修改过的文件，在提交记录、README 或发布说明中明确说明"此仓库包含修改"
+- 如上游项目包含 `NOTICE` 文件，继续分发时应一并保留其要求
 
 ### Cloudflare 相关注意事项
 
 - Cloudflare Workers 免费版有请求额度限制
-- R2 Free 套餐通常有总容量限制与流量限制
+- R2 Free 套餐有总容量与流量限制
 - 分片上传受 Worker 运行时与请求体大小限制影响
-- 本项目当前将总容量按 `10GB` 计算，请根据你的实际套餐自行调整 `STORAGE_LIMIT`
+- 本项目默认按 `10GB` 计算总容量，请根据实际套餐调整 `STORAGE_LIMIT`
 
 ## 许可证
 

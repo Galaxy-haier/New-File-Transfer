@@ -1,0 +1,3 @@
+﻿# 本地预览测试产物
+preview/*
+!preview/server.mjs
