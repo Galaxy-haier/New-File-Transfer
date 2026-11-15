@@ -3277,7 +3277,7 @@ export default {
 
       // 认证 API（登录/登出/设置读取）
       if (path === '/api/auth/login' && request.method === 'POST') {
-        return handleAuthLogin(request, bucket);
+        return handleAuthLogin(request, env, bucket);
       }
       if (path === '/api/auth/logout' && request.method === 'POST') {
         return handleAuthLogout();
@@ -4206,7 +4206,7 @@ async function isSessionValid(request, env) {
 // ==================== 认证/设置 API ====================
 
 // POST /api/auth/login { username, password } -> 签发会话 Cookie
-async function handleAuthLogin(request, bucket) {
+async function handleAuthLogin(request, env, bucket) {
   let body;
   try { body = await request.json(); } catch (e) {
     return jsonResponse({ error: 'Invalid JSON' }, 400);
@@ -4216,7 +4216,7 @@ async function handleAuthLogin(request, bucket) {
   if (!ok) {
     return jsonResponse({ success: false, error: '账号或密码错误' }, 403);
   }
-  const token = await signSession(makeSessionPayload(), {});
+  const token = await signSession(makeSessionPayload(), env);
   const headers = {
     'Content-Type': 'application/json',
     'Set-Cookie': sessionCookieHeader(token, Math.floor(SESSION_TTL / 1000)),
