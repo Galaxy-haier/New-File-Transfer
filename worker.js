@@ -27,10 +27,10 @@ const CONFIG = {
   ALLOWED_TYPES: [],
 
   // 自定义域名（如果有绑定自定义域名，填写这里）
-  CUSTOM_DOMAIN: '',
+  CUSTOM_DOMAIN: 'https://yunpan.zsxh.me',
 
   // API Key（用于程序化访问 /api/v1/* 接口，留空则不启用 API Key 认证）
-  API_KEY: '',
+  API_KEY: '8809f02abe9ec29cfbe57f915ff804e395bb52688fbf093abfb831360c704596',
 
   // 最大并发上传数
   MAX_CONCURRENT_UPLOADS: 3,
@@ -3325,34 +3325,59 @@ async function serveFile(bucket, metaData) {
 async function serveMultipartFile(bucket, metaData) {
   const key = metaData.key;
   const totalChunks = metaData.totalChunks;
+  const totalSize = Number(metaData.size) || 0;
 
-  // 创建 ReadableStream 来流式返回所有分片
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        for (let i = 0; i < totalChunks; i++) {
-          const chunkKey = key + '.part.' + i;
-          const chunk = await bucket.get(chunkKey);
+  // 分片拼接：用 FixedLengthStream + 原生 pipeTo（零拷贝直通）
+  // 旧实现是 reader.read() -> controller.enqueue() 的逐块 JS 循环，
+  // 每字节都要过一遍 JS，大文件（>200MB）会撞 Worker CPU 时间上限
+  // （tail 实测 outcome=exceededCpu / "Worker exceeded CPU time limit"），
+  // 表现为 200 响应但在随机位置静默截断。
+  const FixedLen = (typeof FixedLengthStream !== 'undefined') ? FixedLengthStream : null;
+  let stream;
 
-          if (!chunk) {
-            controller.error(new Error('Chunk ' + i + ' not found'));
-            return;
-          }
-
-          // 读取分片内容并写入流
-          const reader = chunk.body.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            controller.enqueue(value);
-          }
-        }
-        controller.close();
-      } catch (err) {
-        controller.error(err);
+  if (FixedLen && totalSize > 0) {
+    const { readable, writable } = new FixedLen(totalSize);
+    const pump = (async () => {
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = await bucket.get(key + '.part.' + i);
+        if (!chunk) throw new Error('Chunk ' + i + ' not found');
+        await chunk.body.pipeTo(writable, { preventClose: true });
       }
-    }
-  });
+      await writable.close();
+    })();
+    pump.catch((err) => {
+      try { writable.abort(err); } catch (e) { /* 已关闭 */ }
+    });
+    stream = readable;
+  } else {
+    // 回退：环境没有 FixedLengthStream 时用旧的 JS 循环
+    stream = new ReadableStream({
+      async start(controller) {
+        try {
+          for (let i = 0; i < totalChunks; i++) {
+            const chunkKey = key + '.part.' + i;
+            const chunk = await bucket.get(chunkKey);
+
+            if (!chunk) {
+              controller.error(new Error('Chunk ' + i + ' not found'));
+              return;
+            }
+
+            // 读取分片内容并写入流
+            const reader = chunk.body.getReader();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              controller.enqueue(value);
+            }
+          }
+          controller.close();
+        } catch (err) {
+          controller.error(err);
+        }
+      }
+    });
+  }
 
   const headers = {
     'Content-Type': metaData.type || 'application/octet-stream',
