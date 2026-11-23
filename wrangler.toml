@@ -1,6 +1,9 @@
 name = "new-file-transfer"
 main = "worker.js"
-compatibility_date = "2024-09-23"
+# 与线上保持一致：日期固定 2021-11-02（行为不变），仅开 streams 构造函数开关。
+# 大文件分片拼接依赖 new ReadableStream()，缺这个 flag 会报 Error 1101。
+compatibility_date = "2021-11-02"
+compatibility_flags = ["streams_enable_constructors"]
 
 # R2 存储桶：WebDAV 与文件中转共用
 # binding 名必须与 worker.js 里 CONFIG.BUCKET_NAME 一致（默认 "file-transfer"）
