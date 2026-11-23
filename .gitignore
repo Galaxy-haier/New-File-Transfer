@@ -1,3 +1,11 @@
-﻿# 本地预览测试产物
+# 本地预览测试产物
 preview/*
 !preview/server.mjs
+# 回归测试脚本（源码，需要入库）
+!preview/repro-kazumi.mjs
+!preview/multi-device.mjs
+!preview/edge-webdav.mjs
+!preview/unit-webdav.mjs
+
+# 本机 DSH 预设包（与本项目无关）
+dsh-preset/

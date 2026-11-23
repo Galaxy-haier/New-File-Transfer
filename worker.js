@@ -2927,6 +2927,10 @@ function getWebDavUiHtml() {
     }
 
     /* ---- PROPFIND 解析（轻量正则解析 multistatus XML） ---- */
+    function decodeSafe(s) {
+      try { return decodeURIComponent(s); } catch (e) { return s; }
+    }
+
     function parseMultistatus(xmlText) {
       var results = [];
       var responses = xmlText.split(/<D:response[\\s>]/i).slice(1);
@@ -2940,10 +2944,13 @@ function getWebDavUiHtml() {
         var size = lenMatch ? parseInt(lenMatch[1], 10) : 0;
         var modMatch = seg.match(/<D:getlastmodified>([\\s\\S]*?)<\\/D:getlastmodified>/i);
         var mtime = modMatch ? new Date(modMatch[1]) : null;
-        var name = decodeURIComponent(href.replace(/\\/+$/, '').split('/').pop() || '');
-        // 自身项过滤：服务端返回的自身 href 可能带或不带尾斜杠，统一归一化后比较
+        var name = '';
+        try { name = decodeURIComponent(href.replace(/\\/+$/, '').split('/').pop() || ''); }
+        catch (e) { name = href.replace(/\\/+$/, '').split('/').pop() || ''; }
+        // 自身项过滤：服务端 href 是百分号编码的，currentPath 是明文，
+        // 统一解码后再比较，否则非 ASCII 目录名会被当成子项重复列出
         var selfHref = WEBDAV_BASE + (currentPath === '/' ? '/' : currentPath);
-        if (href.replace(/\\/+$/, '') === selfHref.replace(/\\/+$/, '')) continue;
+        if (decodeSafe(href).replace(/\\/+$/, '') === decodeSafe(selfHref).replace(/\\/+$/, '')) continue;
         if (!name) continue;
         results.push({ name: name, isDir: isDir, size: size, mtime: mtime, href: href });
       }
@@ -3317,7 +3324,7 @@ export default {
       if (CONFIG.WEBDAV_ENABLED && (path === CONFIG.WEBDAV_PATH || path.startsWith(CONFIG.WEBDAV_PATH + '/'))) {
         const sessionOk = await isSessionValid(request, env);
         if (!sessionOk) {
-          const basicAuthError = await checkWebDavBasicAuth(request, bucket);
+          const basicAuthError = await checkWebDavBasicAuth(request, bucket, env);
           if (basicAuthError) return basicAuthError;
         }
         return handleWebDav(request, env, bucket, path);
@@ -4279,10 +4286,20 @@ function webdavPathToKey(davPath) {
   let p = davPath || '';
   // 去掉开头的斜杠
   p = p.replace(/^\/+/, '');
-  // 拆段、丢弃空段与 '.'/'..'，防止越界访问
-  const segments = p.split('/').filter((s) => s && s !== '.' && s !== '..');
+  // 记录原始路径是否以斜杠结尾：目录与文件在 R2 里靠这个区分
+  const hadTrailingSlash = /\/$/.test(p);
+  // 拆段、百分号解码、丢弃空段与 '.'/'..'，防止越界访问
+  // （url.pathname 和 MOVE 的 Destination 都是编码态，不解码会把中文名写成 %XX 字面量）
+  const segments = p
+    .split('/')
+    .filter((s) => s && s !== '.' && s !== '..')
+    .map((s) => {
+      try { return decodeURIComponent(s); } catch (e) { return s; }
+    })
+    .filter((s) => s && s !== '.' && s !== '..');
   const normalized = segments.join('/');
-  return CONFIG.WEBDAV_ROOT_KEY + normalized;
+  // 保留尾斜杠，否则目录占位对象的 key 会退化成文件 key
+  return CONFIG.WEBDAV_ROOT_KEY + normalized + (hadTrailingSlash && normalized ? '/' : '');
 }
 
 // 把 R2 key 转回 WebDAV 展示路径（不含 /dav 前缀）
@@ -4298,6 +4315,14 @@ function isDirectoryKey(key) {
   return key.endsWith('/');
 }
 
+// 判断 R2 对象是否是目录：新数据靠 key 尾斜杠，老数据（早期 MKCOL 丢了尾斜杠）
+// 靠 customMetadata.isDir 兜底，避免历史目录被当成文件返回
+function isCollectionObject(key, obj) {
+  if (isDirectoryKey(key)) return true;
+  const meta = obj && obj.customMetadata;
+  return !!meta && (meta.isDir === '1' || meta.isDir === 1 || meta.isDir === true);
+}
+
 function webdavAuthError() {
   return new Response('Unauthorized', {
     status: 401,
@@ -4309,15 +4334,16 @@ function webdavAuthError() {
 }
 
 function getWebDavPassword(env) {
-  return CONFIG.WEBDAV_PASSWORD || env.WEBDAV_PASSWORD || '';
+  return CONFIG.WEBDAV_PASSWORD || (env && env.WEBDAV_PASSWORD) || '';
 }
 
 // Basic Auth 校验（WebDAV 客户端用）：账号/密码优先用站点配置，回退 CONFIG
 // 返回 null = 通过；返回 Response = 401
-async function checkWebDavBasicAuth(request, bucket) {
+async function checkWebDavBasicAuth(request, bucket, env) {
   const cfg = await getSiteConfig(bucket);
   const username = cfg.authUser || CONFIG.WEBDAV_USERNAME || '';
-  const webdavPass = getWebDavPassword({});
+  // 之前这里传的是 {}，导致 WEBDAV_PASSWORD secret 永远读不到（用 secret 部署时 Basic Auth 必失败）
+  const webdavPass = getWebDavPassword(env);
 
   const authHeader = request.headers.get('Authorization') || '';
   const m = authHeader.match(/^Basic\s+(.+)$/i);
@@ -4362,6 +4388,13 @@ function httpDate(d) {
   return t.toUTCString();
 }
 
+// ISO-8601 / RFC3339（WebDAV creationdate 要求的格式）
+// 例：2026-11-23T05:43:21Z
+function isoDate(d) {
+  const t = d instanceof Date ? d : new Date(d);
+  return t.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
 async function handleWebDav(request, env, bucket, path) {
   // 认证已在路由层完成（会话 Cookie 或 Basic Auth 二选一）
 
@@ -4372,7 +4405,7 @@ async function handleWebDav(request, env, bucket, path) {
 
   switch (method) {
     case 'OPTIONS':
-      return handleWebDavOptions();
+      return handleWebDavOptions(env);
     case 'PROPFIND':
       return handleWebDavPropfind(bucket, key, davPath, request);
     case 'GET':
@@ -4401,13 +4434,17 @@ async function handleWebDav(request, env, bucket, path) {
   }
 }
 
-function handleWebDavOptions() {
+function handleWebDavOptions(env) {
+  // DAV: 1 表示支持 RFC4918 基础类；2 只在真正支持 LOCK 时声明——
+  // 声明了 2 却对 LOCK 回 405，部分客户端（Windows 资源管理器 / RaiDrive）会判定服务器异常
+  const supportsLock = !!(env && env.WEBDAV_LOCKS);
   return new Response(null, {
     status: 200,
     headers: {
-      'DAV': '1,2',
+      'DAV': supportsLock ? '1,2' : '1',
       'Allow': 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK',
       'MS-Author-Via': 'DAV',
+      'Accept-Ranges': 'bytes',
     },
   });
 }
@@ -4419,20 +4456,36 @@ async function handleWebDavPropfind(bucket, key, davPath, request) {
 
   const responses = [];
 
-  async function addResponse(itemKey, size, lastModified, isCollection) {
+  async function addResponse(itemKey, size, lastModified, isCollection, etag, contentType) {
     const itemPath = webdavKeyToPath(itemKey);
     // 目录 href 统一带尾斜杠（WebDAV 惯例，客户端依赖它区分目录）
     const normalizedPath = isCollection && !itemPath.endsWith('/') ? itemPath + '/' : itemPath;
     const href = CONFIG.WEBDAV_PATH + (normalizedPath === '/' ? '/' : normalizedPath);
+    // href 按段做规范化百分号编码（RFC3986）：先解码再编码，避免重复编码；
+    // Dart 客户端会 Uri.decodeFull 还原，空格/中文不编码会让其解码出问题
+    const encodedHref = href
+      .split('/')
+      .map((seg) => {
+        if (seg === '') return seg;
+        let plain = seg;
+        try { plain = decodeURIComponent(seg); } catch (e) { /* 非法转义，按原样编码 */ }
+        return encodeURIComponent(plain);
+      })
+      .join('/');
+    const mtime = lastModified || new Date();
     responses.push(
       '<D:response>' +
-        '<D:href>' + webdavXmlEscape(href) + '</D:href>' +
+        '<D:href>' + webdavXmlEscape(encodedHref) + '</D:href>' +
         '<D:propstat>' +
           '<D:prop>' +
             '<D:resourcetype>' + (isCollection ? '<D:collection/>' : '') + '</D:resourcetype>' +
             '<D:getcontentlength>' + (isCollection ? 0 : size) + '</D:getcontentlength>' +
-            '<D:getlastmodified>' + httpDate(lastModified || new Date()) + '</D:getlastmodified>' +
-            '<D:creationdate>' + httpDate(lastModified || new Date()) + '</D:creationdate>' +
+            '<D:getcontenttype>' + webdavXmlEscape(isCollection ? 'httpd/unix-directory' : (contentType || 'application/octet-stream')) + '</D:getcontenttype>' +
+            '<D:getetag>' + webdavXmlEscape('"' + String(etag || '').replace(/"/g, '') + '"') + '</D:getetag>' +
+            '<D:getlastmodified>' + httpDate(mtime) + '</D:getlastmodified>' +
+            // creationdate 必须是 ISO-8601（RFC3339），不能用 RFC1123：
+            // Dart 的 DateTime.parse 只认 ISO-8601，webdav_client 解析时会直接抛 FormatException
+            '<D:creationdate>' + isoDate(mtime) + '</D:creationdate>' +
             '<D:displayname>' + webdavXmlEscape(itemKey.split('/').filter(Boolean).pop() || '') + '</D:displayname>' +
           '</D:prop>' +
           '<D:status>HTTP/1.1 200 OK</D:status>' +
@@ -4444,8 +4497,15 @@ async function handleWebDavPropfind(bucket, key, davPath, request) {
   // 目标对象自身
   const targetObj = await bucket.head(key);
   if (targetObj) {
-    const isCol = isDirectoryKey(key);
-    await addResponse(key, targetObj.size || 0, targetObj.uploaded || new Date(), isCol);
+    const isCol = isCollectionObject(key, targetObj);
+    await addResponse(
+      key,
+      targetObj.size || 0,
+      targetObj.uploaded || new Date(),
+      isCol,
+      targetObj.etag,
+      targetObj.httpMetadata && targetObj.httpMetadata.contentType
+    );
   } else {
     // 目标不存在时，检查是否有以它为前缀的子对象（即它是一个"目录"）
     const prefix = key.endsWith('/') ? key : key + '/';
@@ -4471,8 +4531,15 @@ async function handleWebDavPropfind(bucket, key, davPath, request) {
         // 只取直接子项：去掉前缀与目录占位符的尾部斜杠后不应再包含 '/'
         const rel = objKey.slice(listPrefix.length).replace(/\/+$/, '');
         if (rel === '' || rel.includes('/')) continue;
-        const isCol = isDirectoryKey(objKey);
-        await addResponse(objKey, obj.size || 0, obj.uploaded || new Date(), isCol);
+        const isCol = isCollectionObject(objKey, obj);
+        await addResponse(
+          objKey,
+          obj.size || 0,
+          obj.uploaded || new Date(),
+          isCol,
+          obj.etag,
+          obj.httpMetadata && obj.httpMetadata.contentType
+        );
       }
       cursor = listed.truncated ? listed.cursor : undefined;
     } while (cursor);
@@ -4490,11 +4557,19 @@ async function handleWebDavGet(bucket, key) {
   const obj = await bucket.get(key);
   if (!obj) return new Response('Not Found', { status: 404 });
 
+  const contentType = obj.httpMetadata?.contentType || 'application/octet-stream';
   const headers = {
-    'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
+    'Content-Type': contentType,
     'Content-Length': String(obj.size),
     'ETag': obj.etag,
+    'Last-Modified': httpDate(obj.uploaded || new Date()),
+    'Accept-Ranges': 'bytes',
   };
+  // 目录占位对象（0 字节、尾斜杠）被 GET 时给空体而不是 200 空文件，
+  // 避免客户端把目录当文件下载后解析失败
+  if (isCollectionObject(key, obj) && !obj.size) {
+    return new Response(null, { status: 200, headers });
+  }
   return new Response(obj.body, { headers });
 }
 
@@ -4505,6 +4580,8 @@ async function handleWebDavHead(bucket, key) {
     'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
     'Content-Length': String(obj.size),
     'ETag': obj.etag,
+    'Last-Modified': httpDate(obj.uploaded || new Date()),
+    'Accept-Ranges': 'bytes',
   };
   return new Response(null, { headers });
 }
@@ -4521,7 +4598,10 @@ async function handleWebDavPut(request, bucket, key, davPath) {
   const contentType = request.headers.get('Content-Type') || 'application/octet-stream';
   const now = new Date();
 
-  await bucket.put(key, body, {
+  // 覆盖写之前先确认目标存在（200 vs 201 的语义差别，部分客户端会据此判断）
+  const existed = await bucket.head(key);
+
+  const written = await bucket.put(key, body, {
     httpMetadata: { contentType },
     customMetadata: {
       webdav: '1',
@@ -4532,11 +4612,13 @@ async function handleWebDavPut(request, bucket, key, davPath) {
   // 同步确保父目录占位对象存在（R2 无真目录，靠 / 结尾的占位对象模拟）
   await ensureParentDirectories(bucket, key);
 
-  return new Response(null, { status: 201, headers: { 'ETag': '"' + Date.now().toString(36) + '"' } });
+  // 返回真实 ETag：客户端会用 PROPFIND 里的 getetag 与之比对来决定是否重新下载
+  const headers = written && written.etag ? { 'ETag': written.etag } : {};
+  return new Response(null, { status: existed ? 204 : 201, headers });
 }
 
 async function handleWebDavDelete(bucket, key) {
-  // 如果是目录（尾部斜杠或按前缀存在子对象），递归删除
+  // 目录删除：key 尾斜杠 + 递归清理所有子对象（R2 无真目录）
   const asDirKey = key.endsWith('/') ? key : key + '/';
   let deletedAny = false;
 
@@ -4563,10 +4645,15 @@ async function handleWebDavDelete(bucket, key) {
 async function handleWebDavMkcol(bucket, key) {
   // 规范化成目录 key（末尾带 /）
   const dirKey = key.endsWith('/') ? key : key + '/';
+  const legacyKey = dirKey.replace(/\/+$/, ''); // 早期版本丢过尾斜杠的目录记录
 
-  // 已存在同名对象则报冲突
-  const existing = await bucket.head(dirKey);
-  if (existing) return new Response('Conflict', { status: 405 });
+  // 已存在同名集合 → 405（RFC 4918 要求幂等返回 405，客户端据此判"已存在"）
+  const existingDir = await bucket.head(dirKey);
+  if (existingDir) return new Response('Conflict', { status: 405 });
+
+  // 同名普通文件 → 405（不能把文件当目录覆盖）
+  const existingFile = legacyKey ? await bucket.head(legacyKey) : null;
+  if (existingFile) return new Response('Conflict', { status: 405 });
 
   await bucket.put(dirKey, new Uint8Array(0), {
     httpMetadata: { contentType: 'httpd/unix-directory' },
@@ -4591,7 +4678,7 @@ async function handleWebDavMove(request, bucket, key) {
   const allowOverwrite = !overwrite || overwrite.toUpperCase() !== 'F';
 
   // 目录移动：递归复制+删除
-  const isDir = key.endsWith('/');
+  const isDir = key.endsWith('/') || isCollectionObject(key, await bucket.head(key));
   const keysToMove = [];
 
   if (isDir) {

@@ -57,18 +57,20 @@
 
 ## 部署方式
 
-单文件 Worker 方案，部署 `worker.js` 并绑定 R2 即可。
+单文件 Worker 方案，部署 `worker.js` 并绑定 R2 即可。仓库已带 `wrangler.toml`，可直接命令行部署。
 
-### 1. 创建 Worker 与 R2
+### 1. 登录并创建 R2 桶
 
 ```bash
 wrangler login
-wrangler init file-transfer
+wrangler r2 bucket create file-transfer
 ```
 
-在 Cloudflare Dashboard 创建 R2 Bucket。默认桶名 `file-transfer`，如不同请修改 `worker.js` 里的 `CONFIG.BUCKET_NAME`。
+默认桶名 `file-transfer`，如不同请同时修改 `wrangler.toml` 的 `bucket_name` 与 `worker.js` 里的 `CONFIG.BUCKET_NAME`。
 
-### 2. 绑定 R2
+### 2. 检查 wrangler.toml
+
+仓库自带的 `wrangler.toml` 已配好 R2 绑定：
 
 ```toml
 [[r2_buckets]]
@@ -80,13 +82,19 @@ bucket_name = "file-transfer"
 
 部分 WebDAV 客户端写入时需要 `LOCK`，可绑定一个 KV namespace：
 
+```bash
+wrangler kv namespace create WEBDAV_LOCKS
+```
+
+把返回的 id 填进 `wrangler.toml` 并取消注释：
+
 ```toml
 [[kv_namespaces]]
 binding = "WEBDAV_LOCKS"
 id = "你的 KV namespace id"
 ```
 
-不绑定不影响基础配置同步，仅 `LOCK`/`UNLOCK` 返回 405。
+不绑定不影响基础配置同步，仅 `LOCK`/`UNLOCK` 返回 405，且 `OPTIONS` 不声明 `DAV: 2`。
 
 ### 4. 可选：Secret 环境变量
 
@@ -148,6 +156,7 @@ const CONFIG = {
 - 浏览器访问凭会话 Cookie 放行；WebDAV 客户端用 Basic Auth（账号密码与网页登录一致）。
 - 目录用「以 `/` 结尾的空对象」模拟，文件统一存放在 `WEBDAV_ROOT_KEY`（默认 `dav/`）前缀下，与网页上传的 `uploads/` 完全隔离。
 - WebDAV 单文件上限 `WEBDAV_MAX_FILE_SIZE`（默认 10MB）；Workers 免费版单请求体上限约 100MB。
+- **客户端兼容**：`PROPFIND` 的 `creationdate` 按 RFC3339（ISO-8601）输出、`getetag` 为真实 ETag、`href` 按 RFC3986 逐段百分号编码；`MKCOL` 对已存在目录返回 405。Kazumi（依赖 `webdav_client` 的 `DateTime.parse`）、RaiDrive、Windows 资源管理器均可直接对接。
 
 ### 使用示例（curl）
 
@@ -225,6 +234,10 @@ Content-Type: application/json
 - `worker.js`：主程序（前端页面 + 全部 API + WebDAV 协议实现）
 - `schema.sql`：原项目附带的 D1 SQL（当前代码未使用）
 - `preview/`：本地预览工具（Node 内存模拟 R2/KV，`node preview/server.mjs` 后访问 http://127.0.0.1:8787，预置账号 admin/admin；非生产代码）
+  - `repro-kazumi.mjs`：逐行移植 `webdav_client` 1.2.2 的解析链路，验证 Kazumi 上传/比对/下载
+  - `multi-device.mjs`：双设备往返（首次上传 → 换设备拉取 → 回传）
+  - `edge-webdav.mjs`：目录占位、幂等 MKCOL、中文/空格 href、覆盖 MOVE、递归 DELETE
+  - `unit-webdav.mjs`：直连 worker 模块，覆盖遗留目录兼容与路径穿越
 - `LICENSE.txt`：Apache License 2.0
 
 ## 当前行为说明
